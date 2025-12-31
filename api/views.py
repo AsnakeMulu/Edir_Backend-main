@@ -66,7 +66,24 @@ def members_list_create(request, edir_id=None):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])  # or your custom permission
+def active_members_list(request, edir_id=None):
+        try:
+            edir = Edir.objects.get(id=edir_id)
+        except Edir.DoesNotExist:
+            return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        edir_users = EdirUser.objects.filter(
+            edir=edir,
+            status="Active"
+        ).select_related("user")
+
+        serializer = UserEdirSerializer(edir_users, many=True, context={"edir_id": edir.id})
+        return Response(serializer.data, status=status.HTTP_200_OK) 
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def members_by_edir(request, edir_id):
@@ -133,7 +150,7 @@ def user_detail(request, user_id, edir_id=None):
             is_committee = request.data.get("is_Committee", None)
             if is_committee is not None:
                 # membership = GroupMembership.objects.filter(user=user, group__edir_id=edir_id).first()
-                membership = EdirUser.objects.filter(user=user, edir=edir)
+                membership = EdirUser.objects.filter(user=user, edir=edir).first()
                 if membership:
                     membership.is_committee = bool(is_committee)
                     membership.save()
@@ -966,7 +983,7 @@ def popular_event_list(request):
     serializer = EventSerializer(event, many=True)
     return Response(serializer.data)
 
-@api_view(['GET', 'POST'])
+@api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def event_detail(request, event_id):
@@ -979,7 +996,7 @@ def event_detail(request, event_id):
         serializer = EventSerializer(event)
         return Response(serializer.data)
     
-    elif request.method == "POST" and request.POST.get("_method") == "PUT":
+    elif request.method == "PUT":
         print("FILES:", request.FILES)
         print("DATA:", request.data)
         print("id:", event_id)

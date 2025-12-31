@@ -5,8 +5,10 @@ from . import views
 
 urlpatterns = [
     path('edirs/<int:edir_id>/members/', views.members_list_create, name='members-list-create'),
+    path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'),
     path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'),
+    
     path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'),
     path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'),
     path('user/register/', views.self_register, name='user-register'),
