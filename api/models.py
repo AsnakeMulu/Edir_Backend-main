@@ -285,6 +285,7 @@ class Fee(models.Model):
     payment_date = models.DateTimeField(auto_now_add=True)#blank=True, null=True
     transaction_type = models.CharField(max_length=50, choices=TRANSACTION_TYPES, default="Deposit")
 
+    payment_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=15, choices=STATUS, default="Active")
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)

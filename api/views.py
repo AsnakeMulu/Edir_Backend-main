@@ -1776,6 +1776,7 @@ def create_fee(request, edir_id):
         name=data.get("name"),
         reason=data.get("reason"),
         amount=data.get("amount"),
+        payment_date=data.get("payment_date"),
     )
 
     assign_type = data.get("assign_type")
@@ -1839,6 +1840,7 @@ def update_fee(request, fee_id):
     fee.name = data.get("name", fee.name)
     fee.reason = data.get("reason", fee.reason)
     fee.amount = data.get("amount", fee.amount)
+    fee.payment_date = data.get("payment_date", fee.payment_date)
     fee.save()
 
     supportedMember = data.get("supportedMember")
@@ -1857,10 +1859,10 @@ def update_fee(request, fee_id):
             existing_assignment = FeeAssignment.objects.filter(fee=fee, user=user).exists()
 
             if not existing_assignment:
-                # if str(uid) == str(supportedMember):
-                #     FeeAssignment.objects.create(fee=fee, user=user, payment_status="For You")
-                # else:
-                FeeAssignment.objects.create(fee=fee, user=user)
+                if str(uid) == str(supportedMember):
+                    FeeAssignment.objects.create(fee=fee, user=user, payment_status="For You")
+                else:
+                    FeeAssignment.objects.create(fee=fee, user=user)
         except User.DoesNotExist:
             continue
 
