@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import CustomUser, Help, Event
+from .models import CustomUser, Help, Event, Edir
 
 # @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
@@ -61,6 +61,26 @@ class HelpAdmin(admin.ModelAdmin):
     list_filter = ('type',)
     search_fields = ('question', 'answer')
     ordering = ('type', 'question')
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+@admin.register(Edir)
+class EdirAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created_date','monthly_fee', 'city', 'specific_place', 'meeting_date','meeting_place', 'is_popular', 'status')
+    list_filter = ('city','monthly_fee', 'status')
+    search_fields = ('city', 'name', 'monthly_fee')
+    ordering = ('name', 'monthly_fee', 'city', 'is_popular', 'status')
 
     def has_view_permission(self, request, obj=None):
         return request.user.is_superuser
