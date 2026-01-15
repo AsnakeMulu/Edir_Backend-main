@@ -795,7 +795,7 @@ def get_popular_edirs(request):
     ).values("edir_id")
 
     edirs = Edir.objects.filter(
-        status="Active"
+        status="Active", is_popular = True
     ).exclude(
         id__in=Subquery(excluded_edirs)
     )
