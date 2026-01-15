@@ -153,7 +153,7 @@ class Edir(models.Model):
     city = models.CharField(max_length=100, blank=True, null=True)
     specific_place = models.CharField(max_length=255, blank=True, null=True)
     meeting_date = models.DateField(blank=True, null=True)
-    meeting_place = models.CharField(blank=True, null=True)
+    meeting_place = models.CharField(max_length=155, blank=True, null=True)
     is_popular = models.BooleanField(default=False)
     status = models.CharField(max_length=20, choices=STATUS, default='Active')
 
