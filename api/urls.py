@@ -54,18 +54,18 @@ urlpatterns = [
     path('edir_cancel_request/<int:edir_id>/', views.cancel_edir_request, name='cancel-edir-request'),
 
     path("edir/list/", views.list_edirs, name="list_edirs"),
-    path("payment/add/", views.add_payment, name="add_payment"),
-    path("payment/my/", views.my_payments, name="my_payments"),
-    path("payment/all/", views.all_payments, name="all_payments"),
+    # path("payment/add/", views.add_payment, name="add_payment"),
+    # path("payment/my/", views.my_payments, name="my_payments"),
+    # path("payment/all/", views.all_payments, name="all_payments"),
     
     path("help/", views.get_helps, name="user-helps"),
 
-    path("bill/generate/", views.generate_bill, name="generate-bill"),
-    path("bills/<int:edir_id>/", views.user_bills, name="user-bills"),
+    # path("bill/generate/", views.generate_bill, name="generate-bill"),
+    # path("bills/<int:edir_id>/", views.user_bills, name="user-bills"),
     path("edir/<int:edir_id>/", views.edir_detail, name="edir-detail"),
     
     path("edir_details/<int:edir_id>/", views.edir_details, name="edir-details"),
-    path("bills/summary/", views.bill_summary, name="bill-summary"),
+    # path("bills/summary/", views.bill_summary, name="bill-summary"),
     path("edir/withdrawal/<int:edir_id>/", views.get_edir_withdrawals, name="get-withdrawal"),
     
     path("deposit/details/<int:edir_id>/", views.get_deposit_details, name="get-deposit-details"),
@@ -75,7 +75,7 @@ urlpatterns = [
     
     path("edir/<int:pk>/update_meeting/", views.update_meeting_date),
 
-    path("edir/payments/", views.edir_payments, name="edir-payments"),
+    # path("edir/payments/", views.edir_payments, name="edir-payments"),
     path("fees/create/<int:edir_id>/", views.create_fee, name="create-fees"),
     path("fees/update/<int:fee_id>/", views.update_fee, name="update-fees"),
     path("fees/<int:edir_id>/", views.fees_by_edir, name="get-fees"),
@@ -89,17 +89,17 @@ urlpatterns = [
     path("withdraw/<int:edir_id>/", views.withdraw, name="withdraw"),
     path("expense/update/<int:fee_id>/", views.update_expense, name="update-expense"),
     path("fee/<int:id>/", views.get_fee_details, name="fee-details"),
-    path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
+    # path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
     path("payments/<str:trx_ref>/", views.get_payments, name="get_payment"),
     path("fee/<int:fee_id>/deactivate/", views.deactivate_fee, name="deactivate-fee"),
     path("remove/payment/<str:trx_ref>/", views.remove_payment, name="remove_payment"),
-    path("bill/pay/", views.pay_bill, name="pay-bill"),
-    path("user/<int:edir_id>/payments/", views.user_payments, name="user_payments"),
+    # path("bill/pay/", views.pay_bill, name="pay-bill"),
+    # path("user/<int:edir_id>/payments/", views.user_payments, name="user_payments"),
     
     path("user/payments/<int:user_id>/<int:edir_id>/", views.get_user_payments, name="get_user_payments"),
-    path("edir/<int:edir_id>/unpaid-months/", views.unpaid_months, name="unpaid_months"),
-    path('bill/<int:bill_id>/delete/', views.delete_bill, name='delete-bill'),
-    path('payment/<int:payment_id>/delete/', views.delete_payment, name='delete-payment'),
+    # path("edir/<int:edir_id>/unpaid-months/", views.unpaid_months, name="unpaid_months"),
+    # path('bill/<int:bill_id>/delete/', views.delete_bill, name='delete-bill'),
+    # path('payment/<int:payment_id>/delete/', views.delete_payment, name='delete-payment'),
 ]
 
 if settings.DEBUG:

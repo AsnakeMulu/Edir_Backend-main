@@ -8,9 +8,9 @@ from django.contrib.auth.hashers import make_password
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from .serializers import UserSerializer, FamilySerializer, EdirSerializer, PaymentSerializer, UserWithEdirsSerializer, BillSerializer, PaymentDetailsSerializer, EdirDetailSerializer, BillSummarySerializer, AddEdirSerializer, FeeSerializer, FeeAssignmentsSerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, UserDetailSerializer, BankSerializer, EdirDetailSerializer1, UserEdirSerializer, EdirSerializer1, EdirSerializer2, HelpSerializer, EventSerializer
+from .serializers import UserWithNumFamSerializer, FamilyWithUserSerializer, EdirSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Family, Edir, Payment, Bill, Fee, FeeAssignment, CustomGroup, GroupMembership, Bank, EdirUser, Help, Event
+from .models import Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_date
 from django.db.models.functions import TruncDate
@@ -25,43 +25,26 @@ from rest_framework.parsers import MultiPartParser, FormParser
 User = get_user_model()
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])  # or your custom permission
+@permission_classes([IsAuthenticated])  
 def members_list_create(request, edir_id=None):
     if request.method == 'GET':
-        # users = User.objects.all()
         try:
             edir = Edir.objects.get(id=edir_id)
         except Edir.DoesNotExist:
             return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
         
-        # users = edir.users.filter(status = "Active")
-        # users = User.objects.filter(edir=edir)
-
         edir_users = EdirUser.objects.filter(
             edir=edir,
             status__in=["Active", "Pending"]
         ).select_related("user")
 
-        # edir_users = EdirUser.objects.filter(
-        #     edir=edir,
-        #     status="Active"
-        # ).select_related("user")
-
-        serializer = UserEdirSerializer(edir_users, many=True, context={"edir_id": edir.id})
-        # committee_count = GroupMembership.objects.filter(
-        #     group__edir=edir, is_committee=True
-        # ).count()
-        # member_count = GroupMembership.objects.filter(
-        #     group__edir=edir, is_committee=False
-        # ).count()
+        serializer = UserWithNumFam2Serializer(edir_users, many=True, context={"edir_id": edir.id})
         return Response(serializer.data, status=status.HTTP_200_OK) 
-        # {"committee_count": committee_count,
-        # "member_count": member_count, "members": serializer.data}
 
     if request.method == 'POST':
         data = request.data.copy()
         data['edir'] = edir_id 
-        serializer = UserSerializer(data=request.data)
+        serializer = UserWithNumFamSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -80,7 +63,7 @@ def active_members_list(request, edir_id=None):
             status="Active"
         ).select_related("user")
 
-        serializer = UserEdirSerializer(edir_users, many=True, context={"edir_id": edir.id})
+        serializer = UserWithNumFamSerializer(edir_users, many=True, context={"edir_id": edir.id})
         return Response(serializer.data, status=status.HTTP_200_OK) 
 
 
@@ -136,7 +119,7 @@ def user_detail(request, user_id, edir_id=None):
         except EdirUser.DoesNotExist:
             membership_status = "Not a Member"
     if request.method == 'GET':
-        serializer = UserSerializer(user)
+        serializer = UserWithNumFamSerializer(user)
         # membership = GroupMembership.objects.get(user=user, group__edir_id=edir_id)
         response_data = serializer.data
         response_data["is_committee"] = membership.is_committee if membership else False
@@ -144,7 +127,7 @@ def user_detail(request, user_id, edir_id=None):
         return Response(response_data, status=status.HTTP_200_OK)
 
     elif request.method in ['PUT', 'PATCH']:
-        serializer = UserSerializer(user, data=request.data, partial=True)
+        serializer = UserWithNumFamSerializer(user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             is_committee = request.data.get("is_Committee", None)
@@ -240,16 +223,16 @@ def admin_create_user(request, edir_id):
     try:
         edir = Edir.objects.get(id=edir_id)
         edir.users.add(user)  
-        group, created = CustomGroup.objects.get_or_create(
-            edir=edir,
-            name=f"Committee-{edir_id}"  
-        )
+        # group, created = CustomGroup.objects.get_or_create(
+        #     edir=edir,
+        #     name=f"Committee-{edir_id}"  
+        # )
 
-        GroupMembership.objects.create(
-            user=user,
-            group=group,
-            is_committee=bool(is_committee )
-        )
+        # GroupMembership.objects.create(
+        #     user=user,
+        #     group=group,
+        #     is_committee=bool(is_committee )
+        # )
         # EdirUser.objects.create(
         #     user=user,
         #     edir=edir,
@@ -370,22 +353,22 @@ def add_existed_user(request, edir_id):
     edir.users.add(user)
 
     # Get or create the related group
-    group, created = CustomGroup.objects.get_or_create(
-        edir=edir,
-        name=f"Committee-{edir_id}"
-    )
+    # group, created = CustomGroup.objects.get_or_create(
+    #     edir=edir,
+    #     name=f"Committee-{edir_id}"
+    # )
 
     # Check if GroupMembership already exists
-    membership, created = GroupMembership.objects.get_or_create(
-        user=user,
-        group=group,
-        defaults={'is_committee': bool(is_committee)}
-    )
+    # membership, created = GroupMembership.objects.get_or_create(
+    #     user=user,
+    #     group=group,
+    #     defaults={'is_committee': bool(is_committee)}
+    # )
 
     # If it exists but committee status changed, update it
-    if not created and membership.is_committee != bool(is_committee):
-        membership.is_committee = bool(is_committee)
-        membership.save()
+    # if not created and membership.is_committee != bool(is_committee):
+    #     membership.is_committee = bool(is_committee)
+    #     membership.save()
 
     return Response({'message': 'User successfully added to Edir'}, status=status.HTTP_201_CREATED)
 
@@ -498,7 +481,7 @@ def check_user_phoneNumber(request, phone_number):
     exists = User.objects.filter(phone_number=phone_number).exists()
     if (exists):
         user = User.objects.get(phone_number=phone_number)
-        serializer = UserSerializer(user)
+        serializer = UserWithNumFamSerializer(user)
         return Response({
         "user": serializer.data,
         "phone_number": phone_number,
@@ -555,55 +538,6 @@ def deactivate_member(request, user_id, edir_id):
         "updated_date": edir_user.updated_date,
     }, status=200)
 
-
-# @api_view(['POST'])
-# def add_partner(request, user_id):
-#     data = request.data  # Use request.data to get JSON payload
-#     user = User.objects.get(id=user_id)
-#     full_name = data.get('full_name')
-#     # phone_number = data.get('phone_number')
-#     # email = data.get('email')
-#     gender = data.get('gender')
-#     # date_of_birth = data.get('date_of_birth')
-#     profession = data.get('profession')
-
-#     if not full_name :
-#         return Response({'error': 'full_name is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-#     partner = Partner.objects.create(
-#         user = user,
-#         full_name=full_name,
-#         # phone_number=phone_number,
-#         # email=email,
-#         gender=gender,
-#         # date_of_birth=date_of_birth,
-#         profession=profession,
-#     )
-#     partner.save()
-#     return Response({'message': 'parther added by admin'}, status=status.HTTP_201_CREATED)
-
-# @api_view(['GET', 'PUT', 'PATCH'])
-# @permission_classes([IsAuthenticated])
-# def partner_detail(request, user_id):
-#     try:
-#         user = User.objects.get(id=user_id)
-#         partner = Partner.objects.get(user=user)
-#     except User.DoesNotExist:
-#         return Response({"detail": "Partner not found"}, status=status.HTTP_404_NOT_FOUND)
-#     except Partner.DoesNotExist:
-#         return Response({"detail": "Partner not found"}, status=status.HTTP_404_NOT_FOUND)
-    
-#     if request.method == 'GET':
-#         serializer = PartnerSerializer(partner)
-#         return Response(serializer.data)
-
-#     elif request.method in ['PUT', 'PATCH']:
-#         serializer = PartnerSerializer(partner, data=request.data, partial=True)
-#         if serializer.is_valid():
-#             serializer.save()
-#             return Response(serializer.data, status=status.HTTP_200_OK)
-#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 @api_view(['POST'])
 def add_family(request, user_id):
     data = request.data  
@@ -646,7 +580,7 @@ def user_family_list(request, user_id):
     except Family.DoesNotExist:
         return Response({"detail": "Family not added"}, status=status.HTTP_404_NOT_FOUND)
     
-    serializer = FamilySerializer(family, many=True)
+    serializer = FamilyWithUserSerializer(family, many=True)
     return Response(serializer.data)
 
 
@@ -661,11 +595,11 @@ def family_detail(request, user_id):
         return Response({"detail": "Partner not found"}, status=status.HTTP_404_NOT_FOUND)
     
     if request.method == 'GET':
-        serializer = FamilySerializer(family)
+        serializer = FamilyWithUserSerializer(family)
         return Response(serializer.data)
     
     elif request.method in ['PUT', 'PATCH']:
-        serializer = FamilySerializer(family, data=request.data, partial=True)
+        serializer = FamilyWithUserSerializer(family, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -728,17 +662,17 @@ def add_edir(request):
 
 
         # 2. Create a committee group for this Edir
-        committee_group = CustomGroup.objects.create(
-            name=f"Committee-{edir.id}", 
-            edir=edir,
-        )
+        # committee_group = CustomGroup.objects.create(
+        #     name=f"Committee-{edir.id}", 
+        #     edir=edir,
+        # )
 
         # 3. Add creator to committee group using GroupMembership
-        GroupMembership.objects.create(
-            user=request.user,
-            group=committee_group,
-            is_committee=True
-        )
+        # GroupMembership.objects.create(
+        #     user=request.user,
+        #     group=committee_group,
+        #     is_committee=True
+        # )
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -769,7 +703,7 @@ def get_user_with_edirs(request):
         ediruser__user=request.user,
         ediruser__status="Active"   # <-- FILTER BY ACTIVE MEMBERSHIP
     )
-    serializer = EdirSerializer1(edirs, many=True)
+    serializer = EdirSerializer(edirs, many=True)
     # serializer = UserWithEdirsSerializer(request.user)
     return Response(serializer.data)
 
@@ -800,7 +734,7 @@ def get_popular_edirs(request):
         id__in=Subquery(excluded_edirs)
     )
 
-    serializer = EdirSerializer1(edirs, many=True)
+    serializer = EdirSerializer(edirs, many=True)
     return Response(serializer.data)
 
 # @api_view(["GET"])
@@ -821,7 +755,7 @@ def get_requested_edirs(request):
         ediruser__status__in=["Pending", "Rejected", "Cancelled"]
     ).distinct()
 
-    serializer = EdirSerializer2(
+    serializer = EdirWithUserStatusSerializer(
         edirs,
         many=True,
         context={"request": request}
@@ -861,7 +795,7 @@ def edir_bank_list(request, edir_id):
     except Bank.DoesNotExist:
         return Response({"detail": "Bank not added"}, status=status.HTTP_404_NOT_FOUND)
     
-    serializer = BankSerializer(bank, many=True)
+    serializer = BankWithEdirSerializer(bank, many=True)
     return Response(serializer.data)
 
 
@@ -874,11 +808,11 @@ def bank_detail(request, bank_id):
         return Response({"detail": "Bank not found"}, status=status.HTTP_404_NOT_FOUND)
     
     if request.method == 'GET':
-        serializer = BankSerializer(bank)
+        serializer = BankWithEdirSerializer(bank)
         return Response(serializer.data)
     
     elif request.method in ['PUT', 'PATCH']:
-        serializer = BankSerializer(bank, data=request.data, partial=True)
+        serializer = BankWithEdirSerializer(bank, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1041,113 +975,113 @@ def deactivate_event(request, event_id):
         "updated_date": event.updated_date,
     }, status=200)
 
-# Add Payment
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def add_payment(request):
-    user = request.user
-    edir_id = request.data.get("edirId")
-    edir = Edir.objects.get(id=edir_id)
-    month = request.data.get("month")  
-    amount = request.data.get("amount")
+# # Add Payment
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def add_payment(request):
+#     user = request.user
+#     edir_id = request.data.get("edirId")
+#     edir = Edir.objects.get(id=edir_id)
+#     month = request.data.get("month")  
+#     amount = request.data.get("amount")
 
-    if Bill.objects.filter(user=user, edir=edir, month=month).exists():
-        return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
+#     if Bill.objects.filter(user=user, edir=edir, month=month).exists():
+#         return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
-    payment = Payment.objects.create(
-        user=user,
-        edir=edir,
-        month=month,
-        amount=amount
-    )
+#     payment = Payment.objects.create(
+#         user=user,
+#         edir=edir,
+#         month=month,
+#         amount=amount
+#     )
 
-    serializer = PaymentSerializer(payment)
-    # if serializer.is_valid():
-    # serializer.save()
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
-    # return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+#     serializer = PaymentSerializer(payment)
+#     # if serializer.is_valid():
+#     # serializer.save()
+#     return Response(serializer.data, status=status.HTTP_201_CREATED)
+#     # return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # View Payments for logged-in user
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def my_payments(request):
-    payments = Payment.objects.filter(user=request.user).order_by("-payment_date")
-    serializer = PaymentSerializer(payments, many=True)
-    return Response(serializer.data)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def my_payments(request):
+#     payments = Payment.objects.filter(user=request.user).order_by("-payment_date")
+#     serializer = PaymentSerializer(payments, many=True)
+#     return Response(serializer.data)
 
 # View All Payments (Admin use)
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def all_payments(request):
-    if not request.user.is_staff:
-        return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
-    payments = Payment.objects.all().order_by("-payment_date")
-    serializer = PaymentSerializer(payments, many=True)
-    return Response(serializer.data)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def all_payments(request):
+#     if not request.user.is_staff:
+#         return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
+#     payments = Payment.objects.all().order_by("-payment_date")
+#     serializer = PaymentSerializer(payments, many=True)
+#     return Response(serializer.data)
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def pay_bill(request):
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def pay_bill(request):
 
-    reason = request.data.get("reason")
-    method = request.data.get("method")
-    if(method == "cash"):
-        is_paid = True
-    else:
-        is_paid = False
-    payment = Payment.objects.create(
-        method=method,
-        is_paid = is_paid,
-        reason = reason
-        # transaction_id=request.data.get("transactionId", None),
-    )
-    return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+#     reason = request.data.get("reason")
+#     method = request.data.get("method")
+#     if(method == "cash"):
+#         is_paid = True
+#     else:
+#         is_paid = False
+#     payment = Payment.objects.create(
+#         method=method,
+#         is_paid = is_paid,
+#         reason = reason
+#         # transaction_id=request.data.get("transactionId", None),
+#     )
+#     return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def generate_bill(request):
-    payment = None
-    edir = None
-    user= None
-    user_id = request.data.get("user")
-    if user_id == None:
-        user = request.user
-    else:
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-    edir_id = request.data.get("edirId")
-    month = request.data.get("month")
-    amount = request.data.get("amount")
-    payment_id = request.data.get("payment_id")
-    transaction_type = request.data.get("transaction_type")
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def generate_bill(request):
+#     payment = None
+#     edir = None
+#     user= None
+#     user_id = request.data.get("user")
+#     if user_id == None:
+#         user = request.user
+#     else:
+#         try:
+#             user = User.objects.get(id=user_id)
+#         except User.DoesNotExist:
+#             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+#     edir_id = request.data.get("edirId")
+#     month = request.data.get("month")
+#     amount = request.data.get("amount")
+#     payment_id = request.data.get("payment_id")
+#     transaction_type = request.data.get("transaction_type")
     
-    try:
-        edir = Edir.objects.get(id=edir_id)
-    except Edir.DoesNotExist:
-        return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-    # Check if bill already exists
-    if Bill.objects.filter(user=user, edir=edir, month=month).exists():
-        return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
+#     try:
+#         edir = Edir.objects.get(id=edir_id)
+#     except Edir.DoesNotExist:
+#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
+#     # Check if bill already exists
+#     if Bill.objects.filter(user=user, edir=edir, month=month).exists():
+#         return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
     
-    try:
-        payment = Payment.objects.get(id=payment_id)
-    except Payment.DoesNotExist:
-        return Response({"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND)
+#     try:
+#         payment = Payment.objects.get(id=payment_id)
+#     except Payment.DoesNotExist:
+#         return Response({"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    bill = Bill.objects.create(
-        user=user,
-        edir=edir,
-        # is_paid = True,
-        payment=payment,
-        month=month,
-        amount=amount, #edir.monthly_fee,
-        transaction_type = transaction_type,
-    )
+#     bill = Bill.objects.create(
+#         user=user,
+#         edir=edir,
+#         # is_paid = True,
+#         payment=payment,
+#         month=month,
+#         amount=amount, #edir.monthly_fee,
+#         transaction_type = transaction_type,
+#     )
 
-    return Response(BillSerializer(bill).data, status=status.HTTP_201_CREATED)
+#     return Response(BillSerializer(bill).data, status=status.HTTP_201_CREATED)
 
 
 # @api_view(["POST"])
@@ -1197,42 +1131,43 @@ def generate_bill(request):
 #         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def user_bills(request, edir_id):
-    user = request.user
-    edir = Edir.objects.get(id=edir_id)
-    bills = Bill.objects.filter(user=user, edir=edir).order_by("-created_at")
-    serializer = BillSerializer(bills, many=True)
-    return Response(serializer.data)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def user_bills(request, edir_id):
+#     user = request.user
+#     edir = Edir.objects.get(id=edir_id)
+#     bills = Bill.objects.filter(user=user, edir=edir).order_by("-created_at")
+#     serializer = BillSerializer(bills, many=True)
+#     return Response(serializer.data)
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def user_payments(request, edir_id):
-    user = request.user
-    # edir = None
-    try:
-        edir = Edir.objects.get(id=edir_id)
-    except Edir.DoesNotExist:
-        return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-    # Group bills by payment id
-    payments = (
-        Bill.objects.filter(user=user, edir = edir)
-        .values(
-            "payment_id",
-            "payment__method",
-            "payment__paid_at",
-            "payment__reason",
-            "transaction_type",
-        )
-        .annotate(
-            number_of_months=Count("month", distinct=True),
-            total_amount=Sum("amount"),
-        )
-        .order_by("-payment__paid_at")
-    )
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def user_payments(request, edir_id):
+#     user = request.user
+#     # edir = None
+#     try:
+#         edir = Edir.objects.get(id=edir_id)
+#     except Edir.DoesNotExist:
+#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
+#     # Group bills by payment id
+#     payments = (
+#         Bill.objects.filter(user=user, edir = edir)
+#         .values(
+#             "payment_id",
+#             "payment__method",
+#             "payment__paid_at",
+#             "payment__reason",
+#             "transaction_type",
+#         )
+#         .annotate(
+#             number_of_months=Count("month", distinct=True),
+#             total_amount=Sum("amount"),
+#         )
+#         .order_by("-payment__paid_at")
+#     )
 
-    return Response(payments)
+    # return Response(payments)
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_user_payments(request, user_id, edir_id):
@@ -1274,79 +1209,79 @@ import datetime
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
-def get_months_between(start_date, end_date):
-    months = []
-    current = date(start_date.year, start_date.month, 1)
-    while current <= end_date:
-        months.append(f"{calendar.month_name[current.month]} {current.year}")
-        # increment month
-        if current.month == 12:
-            current = date(current.year + 1, 1, 1)
-        else:
-            current = date(current.year, current.month + 1, 1)
-    return months
+# def get_months_between(start_date, end_date):
+#     months = []
+#     current = date(start_date.year, start_date.month, 1)
+#     while current <= end_date:
+#         months.append(f"{calendar.month_name[current.month]} {current.year}")
+#         # increment month
+#         if current.month == 12:
+#             current = date(current.year + 1, 1, 1)
+#         else:
+#             current = date(current.year, current.month + 1, 1)
+#     return months
 
-def split_unpaid_months(unpaid_months):
-    today = datetime.date.today()
+# def split_unpaid_months(unpaid_months):
+#     today = datetime.date.today()
 
-    previous = []
-    future = []
+#     previous = []
+#     future = []
 
-    for m in unpaid_months:
-        # parse "January 2025" -> datetime.date
-        parsed_date = datetime.datetime.strptime(m, "%B %Y").date().replace(day=1)
+#     for m in unpaid_months:
+#         # parse "January 2025" -> datetime.date
+#         parsed_date = datetime.datetime.strptime(m, "%B %Y").date().replace(day=1)
 
-        if parsed_date <= today.replace(day=1):
-            previous.append(m)
-        else:
-            future.append(m)
+#         if parsed_date <= today.replace(day=1):
+#             previous.append(m)
+#         else:
+#             future.append(m)
 
-    return previous, future
+#     return previous, future
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def unpaid_months(request, edir_id):
-    user = request.user
-    today = date.today()
-    after_3_months = today + relativedelta(months=3)
-    try:
-        edir = Edir.objects.get(id=edir_id, users=user)
-    except Edir.DoesNotExist:
-        return Response({"error": "Edir not found or not joined"}, status=404)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def unpaid_months(request, edir_id):
+#     user = request.user
+#     today = date.today()
+#     after_3_months = today + relativedelta(months=3)
+#     try:
+#         edir = Edir.objects.get(id=edir_id, users=user)
+#     except Edir.DoesNotExist:
+#         return Response({"error": "Edir not found or not joined"}, status=404)
 
-    # all possible months from started_date → today
-    start_date = date(2024, 6, 1)
-    all_months = get_months_between(start_date, after_3_months)
+#     # all possible months from started_date → today
+#     start_date = date(2024, 6, 1)
+#     all_months = get_months_between(start_date, after_3_months)
 
-    # paid months by this user in this edir
-    paid_months = list(
-        Bill.objects.filter(user=user, edir=edir)
-        .values_list("month", flat=True)
-    )
+#     # paid months by this user in this edir
+#     paid_months = list(
+#         Bill.objects.filter(user=user, edir=edir)
+#         .values_list("month", flat=True)
+#     )
 
-    # unpaid = difference
-    unpaid = [m for m in all_months if m not in paid_months]
-    previous_months, future_months = split_unpaid_months(unpaid)
-    return Response({
-        "edir": edir.name,
-        "edir_fee":edir.monthly_fee,
-        "total_months": len(all_months),
-        "paid_months": paid_months,
-        "unpaid_months": previous_months,
-        "unpaid_future_months": future_months,
-        "unpaid_count": len(unpaid),
-    })
+#     # unpaid = difference
+#     unpaid = [m for m in all_months if m not in paid_months]
+#     previous_months, future_months = split_unpaid_months(unpaid)
+#     return Response({
+#         "edir": edir.name,
+#         "edir_fee":edir.monthly_fee,
+#         "total_months": len(all_months),
+#         "paid_months": paid_months,
+#         "unpaid_months": previous_months,
+#         "unpaid_future_months": future_months,
+#         "unpaid_count": len(unpaid),
+#     })
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_payment_details(request, payment_id):
-    try:
-        payment = Payment.objects.get(id=payment_id)
-    except Payment.DoesNotExist:
-        return Response({"error": "Payment not found"}, status=404)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_payment_details(request, payment_id):
+#     try:
+#         payment = Payment.objects.get(id=payment_id)
+#     except Payment.DoesNotExist:
+#         return Response({"error": "Payment not found"}, status=404)
 
-    serializer = PaymentDetailsSerializer(payment)
-    return Response(serializer.data)
+#     serializer = PaymentDetailsSerializer(payment)
+#     return Response(serializer.data)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -1449,18 +1384,18 @@ def get_payments(request, trx_ref):
     return Response(data)
 
 
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_bill(request, bill_id):
-    try:
-        bill = Bill.objects.get(id=bill_id)
-        bill.delete()
-        return Response({"message": "BIll deleted successfully"}, status=status.HTTP_200_OK)
-    except Bill.DoesNotExist:
-        return Response({"error": "Bill not found"}, status=status.HTTP_404_NOT_FOUND)
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
+# def delete_bill(request, bill_id):
+#     try:
+#         bill = Bill.objects.get(id=bill_id)
+#         bill.delete()
+#         return Response({"message": "BIll deleted successfully"}, status=status.HTTP_200_OK)
+#     except Bill.DoesNotExist:
+#         return Response({"error": "Bill not found"}, status=status.HTTP_404_NOT_FOUND)
 
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
 # def delete_payment(request, payment_id):
 #     try:
 #         payment = Payment.objects.get(id=payment_id)
@@ -1473,20 +1408,21 @@ def delete_bill(request, bill_id):
 #         return {"status": "success", "message": "Payment and related bills deleted"}
 #     except Payment.DoesNotExist:
 #         return {"status": "error", "message": "Payment not found"}
+
 # @api_view(["DELETE"])
-def delete_payment(request, payment_id):
-    try:
-        payment = Payment.objects.get(id=payment_id)
-        payment.delete()  # cascades to related Bills because of on_delete=models.CASCADE
-        return Response(
-            {"message": "Payment and related bills deleted successfully."},
-            status=status.HTTP_200_OK
-        )
-    except Payment.DoesNotExist:
-        return Response(
-            {"error": "Payment not found."},
-            status=status.HTTP_404_NOT_FOUND
-        )
+# def delete_payment(request, payment_id):
+#     try:
+#         payment = Payment.objects.get(id=payment_id)
+#         payment.delete()  # cascades to related Bills because of on_delete=models.CASCADE
+#         return Response(
+#             {"message": "Payment and related bills deleted successfully."},
+#             status=status.HTTP_200_OK
+#         )
+#     except Payment.DoesNotExist:
+#         return Response(
+#             {"error": "Payment not found."},
+#             status=status.HTTP_404_NOT_FOUND
+#         )
 
 @api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
@@ -1514,7 +1450,7 @@ def edir_detail(request, edir_id):
 
         
         elif request.method in ['PUT', 'PATCH']:
-            serializer = AddEdirSerializer(edir, data=request.data, partial=True)
+            serializer = EdirSerializer(edir, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1529,36 +1465,36 @@ def edir_details(request, edir_id):
     today = date.today()
     try:
         edir = Edir.objects.get(id=edir_id)
-        serializer = EdirDetailSerializer1(edir, context={"request": request})
+        serializer = EdirDetailSerializer(edir, context={"request": request})
 
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found."},status=status.HTTP_404_NOT_FOUND)
     return Response(serializer.data)
 
 
-@api_view(["GET"])
-def bill_summary(request):
-    transaction_type = request.query_params.get("transaction_type")
-    edir_id = request.query_params.get("edir_id")
+# @api_view(["GET"])
+# def bill_summary(request):
+#     transaction_type = request.query_params.get("transaction_type")
+#     edir_id = request.query_params.get("edir_id")
 
-    if not transaction_type or not edir_id:
-        return Response({"error": "transaction_type and edir_id are required"}, status=400)
+#     if not transaction_type or not edir_id:
+#         return Response({"error": "transaction_type and edir_id are required"}, status=400)
 
-    bills = (
-        Bill.objects.filter(transaction_type=transaction_type, edir_id=edir_id)
-        .values("payment_date__date")   # group by date only
-        .annotate(total_amount=Sum("amount"))
-        .order_by("payment_date__date")
-    )
+#     bills = (
+#         Bill.objects.filter(transaction_type=transaction_type, edir_id=edir_id)
+#         .values("payment_date__date")   # group by date only
+#         .annotate(total_amount=Sum("amount"))
+#         .order_by("payment_date__date")
+#     )
 
-    # Convert queryset dict to serializer-compatible format
-    data = [
-        {"payment_date": item["payment_date__date"], "total_amount": item["total_amount"]}
-        for item in bills
-    ]
+#     # Convert queryset dict to serializer-compatible format
+#     data = [
+#         {"payment_date": item["payment_date__date"], "total_amount": item["total_amount"]}
+#         for item in bills
+#     ]
 
-    serializer = BillSummarySerializer(data, many=True)
-    return Response(serializer.data)
+#     serializer = BillSummarySerializer(data, many=True)
+#     return Response(serializer.data)
 
 # @api_view(["GET"])
 # @permission_classes([IsAuthenticated])
@@ -1714,36 +1650,36 @@ def get_expense_detail(request, fee_id):
         return Response({"error": str(e)}, status=400)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def edir_payments(request):
-    payment_date = request.query_params.get("payment_date")
-    edir_id = request.query_params.get("edir_id")
-    type = request.query_params.get("type")
-    # user = request.user
-    # edir = None
-    try:
-        edir = Edir.objects.get(id=edir_id)
-    except Edir.DoesNotExist:
-        return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-    # Group bills by payment id
-    payments = (
-        Bill.objects.filter(payment_date__date=payment_date, edir = edir, transaction_type= type)
-        .values(
-            "payment_id",
-            "payment__method",
-            "payment__paid_at",
-            "user__full_name",
-            "payment__reason",
-            "transaction_type",
-        )
-        .annotate(
-            number_of_months=Count("month", distinct=True),
-            total_amount=Sum("amount"),
-        )
-    )
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def edir_payments(request):
+#     payment_date = request.query_params.get("payment_date")
+#     edir_id = request.query_params.get("edir_id")
+#     type = request.query_params.get("type")
+#     # user = request.user
+#     # edir = None
+#     try:
+#         edir = Edir.objects.get(id=edir_id)
+#     except Edir.DoesNotExist:
+#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
+#     # Group bills by payment id
+#     payments = (
+#         Bill.objects.filter(payment_date__date=payment_date, edir = edir, transaction_type= type)
+#         .values(
+#             "payment_id",
+#             "payment__method",
+#             "payment__paid_at",
+#             "user__full_name",
+#             "payment__reason",
+#             "transaction_type",
+#         )
+#         .annotate(
+#             number_of_months=Count("month", distinct=True),
+#             total_amount=Sum("amount"),
+#         )
+#     )
 
-    return Response(payments)
+#     return Response(payments)
 
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
@@ -1987,7 +1923,7 @@ def get_unpaid_fees(request, edir_id, user_id):
             payment_status="Not Paid"
         ).order_by("-id")
 
-        serializer = FeeAssignmentsSerializer(unpaid_fees, many=True)
+        serializer = FeeAssignmentReadOnlySerializer(unpaid_fees, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2003,7 +1939,7 @@ def get_paid_fees(request, trx_ref):
             payment_status="Paid"
         )
 
-        serializer = FeeAssignmentsSerializer(paid_fees, many=True)
+        serializer = FeeAssignmentReadOnlySerializer(paid_fees, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
