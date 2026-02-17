@@ -5,8 +5,8 @@ from .models import CustomUser, Help, Event, Edir
 # @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
-    list_display = ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'city', 'specific_place', 'is_staff', 'is_active' ) #,
-    list_filter = ('city', 'gender', 'is_staff', 'gender',) 
+    list_display = ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'address', 'is_staff', 'is_active' ) #,
+    list_filter = ('address', 'gender', 'is_staff', 'gender',) 
     fieldsets = (
         (None, {'fields': ('phone_number', 'password')}),
         ('Permissions', {'fields': ( 'groups', 'user_permissions', 'is_staff', 'is_active', 'is_superuser')}), #
@@ -77,10 +77,10 @@ class HelpAdmin(admin.ModelAdmin):
 
 @admin.register(Edir)
 class EdirAdmin(admin.ModelAdmin):
-    list_display = ('name', 'created_date','monthly_fee', 'city', 'specific_place', 'meeting_date','meeting_place', 'is_popular', 'status')
-    list_filter = ('city','monthly_fee', 'status')
-    search_fields = ('city', 'name', 'monthly_fee')
-    ordering = ('name', 'monthly_fee', 'city', 'is_popular', 'status')
+    list_display = ('name', 'created_date','monthly_fee', 'address', 'description', 'meeting_date','meeting_place', 'is_popular', 'status')
+    list_filter = ('address','monthly_fee', 'status')
+    search_fields = ('address', 'name', 'monthly_fee')
+    ordering = ('name', 'monthly_fee', 'address', 'is_popular', 'status')
 
     def has_view_permission(self, request, obj=None):
         return request.user.is_superuser

@@ -89,9 +89,18 @@ class FamilyWithUserSerializer(serializers.ModelSerializer):
 
 
 class EdirSerializer(serializers.ModelSerializer):
+    meeting_date = serializers.DateField(
+        input_formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"],
+        required=False,
+        allow_null=True,
+    )
     class Meta:
         model = Edir
-        fields = [
+        fields = [ 
+            "created_by", 
+            "is_popular", 
+            "status", 
+            "updated_date",
             "id",
             "name",
             "monthly_fee",
@@ -100,7 +109,14 @@ class EdirSerializer(serializers.ModelSerializer):
             "created_date",
             "meeting_date",
             "meeting_place",
-        ]
+        ] 
+        read_only_fields = (
+            "created_by",
+            "created_date",
+            "updated_date",
+            "is_popular",
+            "status",
+        )
 
 
 class EdirWithUsersSerializer(serializers.ModelSerializer):

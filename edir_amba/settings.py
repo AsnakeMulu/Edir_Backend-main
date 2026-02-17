@@ -75,8 +75,8 @@ DJOSER = {
     'USER_CREATE_PASSWORD_RETYPE': True,
     'SERIALIZERS': {
         'user_create': 'api.serializers.UserCreateSerializer',
-        'user': 'api.serializers.UserSerializer',
-        'current_user': 'api.serializers.UserSerializer',
+        'user': 'api.serializers.UserWithNumFamSerializer',
+        'current_user': 'api.serializers.UserWithNumFamSerializer',
     },
 }
 SIMPLE_JWT = {
@@ -146,6 +146,48 @@ AUTH_PASSWORD_VALIDATORS = [
     #     'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     # },
 ]
+import os
+from datetime import datetime
+
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+today = datetime.now().strftime("%Y-%m-%d")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "raise_exceptions": False,
+
+    "formatters": {
+        "standard": {
+            "format": "[{asctime}] {levelname} | {name} | {message}",
+            "style": "{",
+        },
+    },
+
+    "handlers": {
+        "daily_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": os.path.join(
+                LOG_DIR, f"user_registration_{today}.log"
+            ),
+            "encoding": "utf-8",
+            "formatter": "standard",
+            "delay": True,
+        },
+    },
+
+    "loggers": {
+        "user_registration": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
+
 
 
 # Internationalization

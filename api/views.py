@@ -10,7 +10,7 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from .serializers import UserWithNumFamSerializer, FamilyWithUserSerializer, EdirSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction
+from .models import EdirAuditLog, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction, UserAuditLog, EdirUserAuditLog
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_date
 from django.db.models.functions import TruncDate
@@ -21,6 +21,8 @@ from django.views.decorators.csrf import csrf_exempt
 import uuid
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.forms.models import model_to_dict
+import logging
 
 User = get_user_model()
 
@@ -148,23 +150,80 @@ def user_detail(request, user_id, edir_id=None):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def self_register(request):
+    logger = logging.getLogger("user_registration")
     if request.method == 'POST':
+        try:
+            logger.info("Self registration request received")
+            data = request.data  # Use request.data to get JSON payload
+
+            full_name = data.get('full_name')
+            phone_number = data.get('phone_number')
+            # email = data.get('email')
+            gender = data.get('gender')
+            marital_status = data.get('marital_status')
+            profession = data.get('profession')
+            address = data.get('address')
+            password = data.get('password')
+
+            if not full_name or not phone_number:
+                logger.warning(
+                    f"Validation failed - Missing fields | phone: {phone_number}"
+                )
+                return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            user = User.objects.create(
+                full_name=full_name,
+                phone_number=phone_number,
+                # email=email,
+                gender=gender,
+                marital_status=marital_status,
+                profession=profession,
+                address=address,
+                password=make_password(password),
+            )
+            user.save()
+
+            UserAuditLog.objects.create(
+            user=user,
+            action="Self Registered",
+            performed_by=user,
+            new_value=model_to_dict(user, exclude=["password","last_login", "user_permissions","updated_date"]),
+            )
+            logger.info(
+                f"User registered successfully | user_id={user.id} | phone={user.phone_number}"
+            )
+            return Response({'message': 'Registration successful'})
+        except Exception as e:
+            logger.exception(
+                f"Registration failed | phone={request.data.get('phone_number')}"
+            )
+
+            return Response(
+                {'error': 'Internal server error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+@api_view(['POST'])
+def admin_create_user(request, edir_id):
+    
+    logger = logging.getLogger("user_added_by_user")
+    try:
+        logger.info("User added by admin request received")
         data = request.data  # Use request.data to get JSON payload
 
         full_name = data.get('full_name')
         phone_number = data.get('phone_number')
         # email = data.get('email')
         gender = data.get('gender')
-        # date_of_birth = data.get('date_of_birth')
         marital_status = data.get('marital_status')
-        # language = data.get('language')
         profession = data.get('profession')
-        # country = data.get('country')
-        city = data.get('city')
-        specific_place = data.get('specific_place')
-        password = data.get('password')
+        address = data.get('address')
+        is_committee = data.get('is_Committee', False)
 
         if not full_name or not phone_number:
+            logger.warning(
+                f"Validation failed - Missing fields | phone: {phone_number}"
+            )
             return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.create(
@@ -172,67 +231,25 @@ def self_register(request):
             phone_number=phone_number,
             # email=email,
             gender=gender,
-            # date_of_birth=date_of_birth,
             marital_status=marital_status,
-            # language=language,
             profession=profession,
-            # country=country,
-            city=city,
-            specific_place=specific_place,
-            password=make_password(password),
+            address=address,
         )
+        user.set_unusable_password()
         user.save()
-        # data = request.POST
-        # user = User.objects.create(
-        #     full_name=data['full_name'],
-        #     phone_number=data['phone_number'],
-        #     # email=data['email'],
-        #     password=make_password(data['password']),  # hash the password
-        # )
-        return Response({'message': 'Registration successful'})
-
-@api_view(['POST'])
-def admin_create_user(request, edir_id):
-    data = request.data  # Use request.data to get JSON payload
-
-    full_name = data.get('full_name')
-    phone_number = data.get('phone_number')
-    # email = data.get('email')
-    gender = data.get('gender')
-    marital_status = data.get('marital_status')
-    profession = data.get('profession')
-    city = data.get('city')
-    specific_place = data.get('specific_place')
-    is_committee = data.get('is_Committee', False)
-
-    if not full_name or not phone_number:
-        return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
-
-    user = User.objects.create(
-        full_name=full_name,
-        phone_number=phone_number,
-        # email=email,
-        gender=gender,
-        marital_status=marital_status,
-        profession=profession,
-        city=city,
-        specific_place=specific_place,
-    )
-    user.set_unusable_password()
-    user.save()
-    try:
+        logger.info(
+            f"User added by admin successfully | user_id={user.id} | phone={user.phone_number}"
+        )
+        
+        UserAuditLog.objects.create(
+            user=user,
+            action="Created by Admin",
+            performed_by=request.user,
+            new_value=model_to_dict(user, exclude=["password","last_login", "user_permissions","updated_date"]),
+            )
+    
         edir = Edir.objects.get(id=edir_id)
-        edir.users.add(user)  
-        # group, created = CustomGroup.objects.get_or_create(
-        #     edir=edir,
-        #     name=f"Committee-{edir_id}"  
-        # )
-
-        # GroupMembership.objects.create(
-        #     user=user,
-        #     group=group,
-        #     is_committee=bool(is_committee )
-        # )
+        edir.users.add(user) 
         # EdirUser.objects.create(
         #     user=user,
         #     edir=edir,
@@ -241,10 +258,29 @@ def admin_create_user(request, edir_id):
         edir_user = EdirUser.objects.get(user=user, edir=edir)
         edir_user.is_committee = bool(is_committee)
         edir_user.save()
+        logger.info(
+            f"User added to edir successfully | user_id={user.id} | edir_id={edir.id}"
+        )
+        EdirUserAuditLog.objects.create(
+            edirUser=edir_user,
+            action="Added by Admin",
+            performed_by=request.user,
+            new_value=model_to_dict(edir_user),
+            )
+
+
+        return Response({'message': 'User created by admin'}, status=status.HTTP_201_CREATED)
+
     except Edir.DoesNotExist:
         return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    return Response({'message': 'User created by admin'}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.exception(
+            f"Registration failed | phone={request.data.get('phone_number')}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])
@@ -644,38 +680,56 @@ def delete_family_member(request, family_id):
         return Response({"error": "Family member not found"}, status=status.HTTP_404_NOT_FOUND)
     
 @api_view(["POST"])
-
 @permission_classes([IsAuthenticated])
 def add_edir(request):
-    serializer = EdirSerializer(data=request.data)
-    if serializer.is_valid():
-        # 1. Create the Edir
-        edir = serializer.save()
-        # edir.users.add(request.user)  # Add creator as member of the Edir
+    print("Edir creation request received")
+    logger = logging.getLogger("user_registration")
+    try:
+        #Create Edir
+        serializer = EdirSerializer(data=request.data)
+        if serializer.is_valid():
+            edir = serializer.save(created_by=request.user)
+            logger.info(
+                f"Edir Created by User successfully | edir_id={edir.id} | name={edir.name}"
+            )
+            
+            EdirAuditLog.objects.create(
+                edir=edir,
+                action="CREATED",
+                performed_by=request.user,
+                new_value=model_to_dict(edir, exclude=["updated_date"]),
+                )
+            
+            # Add creator as committee member of the Edir
+            edir_user = EdirUser.objects.create(
+                user=request.user,
+                edir=edir,
+                maker=request.user,
+                is_committee=True,
+                status="Active"
+            )
+            logger.info(
+                f"User added to edir successfully when creating the edir as committee | user_id={request.user.id} | edir_id={edir.id}"
+            )
+            EdirUserAuditLog.objects.create(
+                edirUser=edir_user,
+                action="Added when Create Edir",
+                performed_by=request.user,
+                new_value=model_to_dict(edir_user),
+                )
 
-        EdirUser.objects.create(
-            user=request.user,
-            edir=edir,
-            is_committee=True,
-            status="Active"
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            print(serializer.errors)
+            return Response({'error': 'Bad request error', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception(
+            f"Edir Creation failed | name={edir.name}"
         )
-
-
-        # 2. Create a committee group for this Edir
-        # committee_group = CustomGroup.objects.create(
-        #     name=f"Committee-{edir.id}", 
-        #     edir=edir,
-        # )
-
-        # 3. Add creator to committee group using GroupMembership
-        # GroupMembership.objects.create(
-        #     user=request.user,
-        #     group=committee_group,
-        #     is_committee=True
-        # )
-
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 # @api_view(["POST"])
 # @permission_classes([IsAuthenticated])
@@ -1434,15 +1488,6 @@ def edir_detail(request, edir_id):
         if request.method == 'GET':
             serializer = EdirDetailSerializer(edir, context={"request": request})
             
-        # start_date = date(2024, 6, 1)
-        # all_months = get_months_between(start_date, today)
-
-        # paid_months = list(
-        #     Bill.objects.filter(user=user, edir=edir, is_paid=True)
-        #     .values_list("month", flat=True)
-        # )
-        # unpaid = [m for m in all_months if m not in paid_months]
-        
         # data = serializer.data
         # data["member_count"] = edir.users.count()
         # data["unpaid_months"] = unpaid.count() 
