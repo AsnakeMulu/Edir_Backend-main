@@ -310,12 +310,12 @@ class EdirUserAuditLog(models.Model):
         ("Requested to Join", "Requested to Join"),
         ("Cancelled Join Request", "Cancelled Join Request"),
         ("Added by Admin", "Added by Admin"),
-        ("Added when Create Edir", "Added when Create Edir"),
+        ("Creator Added when Create Edir", "Creator Added when Create Edir"),
     )
     edirUser = models.ForeignKey(
         EdirUser, on_delete=models.CASCADE, related_name="edirUserLogs"
     )
-    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
@@ -387,6 +387,8 @@ class BankAuditLog(models.Model):
         ("CREATED", "Created"),
         ("MODIFIED", "Modified"),
         ("Disabled", "Disabled"),
+        ("Added Bank Account", "Added Bank Account"),
+        ("Approved Bank Account", "Approved Bank Account"),
     )
     # STATUS_CHOICES = (
     #     ('Pending', 'Pending'),
@@ -397,11 +399,11 @@ class BankAuditLog(models.Model):
     bank = models.ForeignKey(
         Bank, on_delete=models.CASCADE, related_name="bankLogs"
     )
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
-    previous_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
     new_status = models.CharField(max_length=20)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
@@ -444,9 +446,18 @@ class Fee(models.Model):
         ("Registration Fee", "Registration Fee"),
         ("Other", "Other"),
     ]
+    STATUS = [
+        ('Active', 'Active'),
+        ('Pending', 'Pending'),
+        ('Rejected', 'Rejected'),
+    ]
 
     edir = models.ForeignKey("Edir", on_delete=models.CASCADE, related_name="fees")
-    # name = models.CharField(max_length=100, blank=True, null=True) 
+    name = models.CharField(max_length=100, blank=True, null=True) 
+    supported_member = models.ForeignKey(
+        CustomUser, related_name="fee_supported_member",
+        on_delete=models.SET_NULL, null=True, blank=True
+    )
     category = models.CharField(max_length=30, choices=CATEGORY, default="Monthly Fee")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField(blank=True, null=True)
@@ -465,7 +476,7 @@ class Fee(models.Model):
     updated_date = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.name} - {self.amount} Birr ({self.name})"
+        return f"{self.category}, Supported Member = {self.supported_member}, {self.name} {self.amount} Birr, reason = {self.reason}, Maker - {self.maker}, Payment date - {self.payment_date}"
     
 
 class FeeAuditLog(models.Model):
@@ -490,39 +501,9 @@ class FeeAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.fee.category} - {self.action}"
-    
 
-class FeeAssignment(models.Model):
-    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="assignments")
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, blank=True, null=True)
-    maker = models.ForeignKey(
-        CustomUser, related_name="fee_assigned_by", on_delete=models.CASCADE
-    )
-    created_date = models.DateTimeField(auto_now_add=True)
-
-    
-# class FeeAssignAuditLog(models.Model):
-#     ACTION_CHOICES = (
-#         ("CREATED", "Created"),
-#         # ("MODIFIED", "Modified"),
-#         ("REMOVED", "Removed"),
-#         # ("CANCELLED", "Cancelled"),
-#     )
-
-#     feeAssign = models.ForeignKey(
-#         FeeAssignment, on_delete=models.CASCADE, related_name="feeAssignLogs"
-#     )
-#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-#     performed_by = models.ForeignKey(
-#         CustomUser, on_delete=models.SET_NULL, null=True
-#     )
-
-#     # previous_status = models.CharField(max_length=20)
-#     # new_status = models.CharField(max_length=20)
-#     created_at = models.DateTimeField(auto_now_add=True)
-
-#     def __str__(self):
-#         return f"{self.feeAssign.user} - {self.action}"
+def generate_reference():
+    return uuid.uuid4().hex[:16].upper()
 
 class Transaction(models.Model):
     TRANSACTION_TYPE = (
@@ -530,14 +511,20 @@ class Transaction(models.Model):
         ("PAYMENT", "Payment"),
     )
     STATUS = (
-        ("PENDING", "Pending Approval"),
+        ("PENDING", "Pending"),
         ("APPROVED", "Approved"),
         ("REJECTED", "Rejected"),
     )
 
-    feeAssignment = models.ForeignKey(FeeAssignment, on_delete=models.CASCADE, related_name="feeAssignments")
-    reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
-    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPE)
+    # feeAssignment = models.ManyToManyField(FeeAssignment, related_name="feeAssignments")
+    # reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    reference = models.CharField(
+        max_length=16,
+        unique=True,
+        editable=False,
+        default=generate_reference
+    )
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     payment_method = models.CharField(max_length=50, blank=True, null=True) 
     bank = models.ForeignKey(Bank, on_delete=models.CASCADE, related_name="bank", blank=True, null=True)
@@ -558,21 +545,21 @@ class Transaction(models.Model):
 
 class TrxAuditLog(models.Model):
     ACTION_CHOICES = (
-        ("CREATED", "Created"),
-        ("APPROVED", "Approved"),
-        ("REJECTED", "Rejected"),
-        ("CANCELLED", "Cancelled"),
+        ("TRX_CREATED", "Trx_Created"),
+        ("TRX_APPROVED", "Trx_Approved"),
+        ("TRX_REJECTED", "Trx_Rejected"),
+        ("TRX_CANCELLED", "Trx_Cancelled"),
     )
     transaction = models.ForeignKey(
         Transaction, on_delete=models.CASCADE, related_name="trxLogs"
     )
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
 
-    previous_status = models.CharField(max_length=20)
-    new_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=50, null=True, blank=True)
+    new_status = models.CharField(max_length=50)
 
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
@@ -582,6 +569,40 @@ class TrxAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.transaction.reference} - {self.action}"
+
+
+class FeeAssignment(models.Model):
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="assignments")
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, blank=True, null=True)
+    maker = models.ForeignKey(
+        CustomUser, related_name="fee_assigned_by", on_delete=models.CASCADE
+    )
+    created_date = models.DateTimeField(auto_now_add=True)
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='trx', null=True, blank=True)
+
+    
+class FeeAssignAuditLog(models.Model):
+    ACTION_CHOICES = (
+        ("CREATED", "Created"),
+        # ("MODIFIED", "Modified"),
+        ("REMOVED", "Removed"),
+        # ("CANCELLED", "Cancelled"),
+    )
+
+    feeAssign = models.ForeignKey(
+        FeeAssignment, on_delete=models.CASCADE, related_name="feeAssignLogs"
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    performed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True
+    )
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.feeAssign.user} - {self.action}"
 
 class Event(models.Model):
     edir = models.ForeignKey("Edir", on_delete=models.CASCADE, related_name="event",  null=True, blank=True)

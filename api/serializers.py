@@ -1,6 +1,6 @@
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event
+from .models import CustomUser, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction
 import calendar
 from datetime import date
 from django.db.models import Sum
@@ -59,13 +59,14 @@ class UserWithNumFam2Serializer(serializers.ModelSerializer):
     # city = serializers.CharField(source="user.city")
     address = serializers.CharField(source="user.address")
     user_status = serializers.CharField(source="status")
+    # is_committee = serializers.CharField(source="is_committee")
     number_of_family = serializers.SerializerMethodField()
 
     class Meta:
-        model = EdirUser #why???????????
+        model = EdirUser 
         fields = [
             'id', 'full_name', 'phone_number',  'gender', 'marital_status', 
-            'profession', 'address', "user_status", "number_of_family"
+            'profession', 'address', "user_status", "number_of_family", "is_committee"
         ]
     def get_number_of_family(self, obj):
         return obj.user.family.filter(status="Active").count()
@@ -140,7 +141,7 @@ class BankWithEdirSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bank
         fields = [
-            'id', 'bank_name', 'account_number', 'account_name', 'edir',
+            'id', 'bank_name', 'account_number', 'account_name','status', 'edir', "maker", 
         ]
 
 
@@ -259,8 +260,8 @@ class EdirDetailSerializer(serializers.ModelSerializer):
             FeeAssignment.objects.filter(
                 user=user,
                 fee__edir=obj,
-                fee__transaction_type="Deposit",
-                payment_status="Not Paid",
+                # fee__transaction_type="Deposit",
+                # payment_status="Not Paid",
             )
             .aggregate(total=Sum("fee__amount"))["total"]
         )
@@ -289,8 +290,13 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         model = FeeAssignment
         fields = "__all__"
 
+class SimpleUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ["id", "full_name", "phone_number"]
+
 class FeeSerializer(serializers.ModelSerializer):
-    # assignments = FeeAssignmentSerializer(many=True, read_only=True)
+    supported_member = SimpleUserSerializer(read_only=True)
 
     class Meta:
         model = Fee
@@ -370,11 +376,35 @@ class FeeTrxSerializer(serializers.ModelSerializer):
         
 
 class FeeWithAssignmentsSerializer(serializers.ModelSerializer):
-    assignments = FeeTrxSerializer(many=True, read_only=True)
-
+    # assignments = FeeTrxSerializer(many=True, read_only=True)
+    supported_member = SimpleUserSerializer(read_only=True)
     class Meta:
         model = Fee
-        fields = ["id", "category", "amount", "reason", "payment_date", "assignments"]
+        fields = ["id", "category", "amount", "reason", "payment_date", "supported_member"]
+
+class ExpenseFeeSerializer(serializers.ModelSerializer):
+    fee_id = serializers.IntegerField(source="trx.first.fee.id")
+    name = serializers.CharField(source="trx.first.fee.name")
+    category = serializers.CharField(source="trx.first.fee.category")
+    amount = serializers.DecimalField(
+        source="trx.first.fee.amount",
+        max_digits=10,
+        decimal_places=2
+    )
+    status = serializers.CharField(source="trx.first.fee.status")
+    supported_member = SimpleUserSerializer(source="trx.first.fee.supported_member", read_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = [
+            "id",
+            "fee_id",
+            "name",
+            "category",
+            "amount",
+            "status",
+            "supported_member",
+        ]
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)

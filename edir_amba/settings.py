@@ -185,6 +185,36 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "edir_creation": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "fetch_payment": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "bank_account": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "fee": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "make_payment": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "expense": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
