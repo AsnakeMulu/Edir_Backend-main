@@ -1,6 +1,6 @@
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction
+from .models import CustomUser, EdirChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction, BankChangeRequest
 import calendar
 from datetime import date
 from django.db.models import Sum
@@ -16,6 +16,11 @@ class UserCreateSerializer(BaseUserCreateSerializer):
         if not value.isdigit():
             raise serializers.ValidationError("Phone number must contain only digits.")
         return value
+
+class SimpleUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ["id", "full_name", "phone_number"]
 
 class UserWithNumFamSerializer(serializers.ModelSerializer):
     number_of_family = serializers.SerializerMethodField()
@@ -98,7 +103,7 @@ class EdirSerializer(serializers.ModelSerializer):
     class Meta:
         model = Edir
         fields = [ 
-            "created_by", 
+            # "created_by", 
             "is_popular", 
             "status", 
             "updated_date",
@@ -112,13 +117,51 @@ class EdirSerializer(serializers.ModelSerializer):
             "meeting_place",
         ] 
         read_only_fields = (
-            "created_by",
+            # "created_by",
             "created_date",
             "updated_date",
             "is_popular",
             "status",
         )
+        
+class EdirChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleUserSerializer(read_only=True)
 
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = EdirChangeRequest
+        fields = [
+            "id",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
+
+
+class BankChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleUserSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = BankChangeRequest
+        fields = [
+            "id",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
 
 class EdirWithUsersSerializer(serializers.ModelSerializer):
     users = serializers.PrimaryKeyRelatedField(read_only=True, many=True)
@@ -141,7 +184,13 @@ class BankWithEdirSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bank
         fields = [
-            'id', 'bank_name', 'account_number', 'account_name','status', 'edir', "maker", 
+            'id', 'bank_name', 'account_number', 'account_name','status', 'edir', 
+        ]
+class BankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bank
+        fields = [
+            'id', 'bank_name', 'account_number', 'account_name','status',
         ]
 
 
@@ -290,11 +339,6 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         model = FeeAssignment
         fields = "__all__"
 
-class SimpleUserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = ["id", "full_name", "phone_number"]
-
 class FeeSerializer(serializers.ModelSerializer):
     supported_member = SimpleUserSerializer(read_only=True)
 
@@ -334,35 +378,86 @@ class FeeAssignmentReadOnlySerializer(serializers.ModelSerializer):
 #         model = FeeAssignment
 #         fields = ["id", "fee_amount", "user_full_name"]
 
-class FeeAssignmentDetailSerializer(serializers.ModelSerializer):
-    user_full_name = serializers.CharField(source="user.full_name", read_only=True)
-    # fee_name = serializers.CharField(source="fee.name", read_only=True)
-    fee_amount = serializers.DecimalField(source="fee.amount", max_digits=10, decimal_places=2, read_only=True)
-    fee_category = serializers.CharField(source="fee.category", read_only=True)
-    fee_reason = serializers.CharField(source="fee.reason", read_only=True)
+# class FeeAssignmentDetailSerializer(serializers.ModelSerializer):
+#     user_full_name = serializers.CharField(source="fee.supported_member.full_name", read_only=True)
+#     fee_name = serializers.CharField(source="fee.name", read_only=True)
+#     fee_amount = serializers.DecimalField(source="fee.amount", max_digits=10, decimal_places=2, read_only=True)
+#     fee_category = serializers.CharField(source="fee.category", read_only=True)
+#     fee_reason = serializers.CharField(source="fee.reason", read_only=True)
+#     payment_date = serializers.CharField(source="fee.created_date", read_only=True)
 
-    class Meta:
-        model = FeeAssignment
-        fields = [
-            "id",
-            # "fee_name",
-            "fee_amount",
-            "fee_category",
-            "fee_reason",
-            # "transaction_type",
-            # "payment_status",
-            # "payment_method",
-            "payment_date",
-            # "Trx_ref",
-            "user_full_name",
-        ]
+#     class Meta:
+#         model = FeeAssignment
+#         fields = [
+#             "id",
+#             # "fee_name",
+#             "fee_amount",
+#             "fee_category",
+#             "fee_reason",
+#             # "transaction_type",
+#             "payment_status",
+#             # "payment_method",
+#             "payment_date",
+#             # "Trx_ref",
+#             "user_full_name",
+#         ]
     # def to_representation(self, instance):
     #     data = super().to_representation(instance)
     #     if not data.get("user_full_name"):
     #         data["user_full_name"] = "Edir"
 
     #     return data
+class FeeAssignmentDetailSerializer(serializers.ModelSerializer):
 
+    user_full_name = serializers.SerializerMethodField()
+    fee_name = serializers.SerializerMethodField()
+    fee_amount = serializers.DecimalField(
+        source="fee.amount",
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    fee_category = serializers.CharField(source="fee.category", read_only=True)
+    fee_reason = serializers.CharField(source="fee.reason", read_only=True)
+
+    payment_status = serializers.SerializerMethodField()
+    payment_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FeeAssignment
+        fields = [
+            "id",
+            "fee_name",
+            "fee_amount",
+            "fee_category",
+            "fee_reason",
+            "payment_status",
+            "payment_date",
+            "user_full_name",
+        ]
+
+    # ✅ supported_member safe access
+    def get_user_full_name(self, obj):
+        if obj.fee and obj.fee.supported_member:
+            return obj.fee.supported_member.full_name
+        return None
+
+    def get_fee_name(self, obj):
+        if obj.fee:
+            return obj.fee.name or ""
+        return ""
+
+    # ✅ transaction may not exist
+    def get_payment_status(self, obj):
+        if hasattr(obj, "transaction") and obj.transaction:
+            return obj.transaction.payment_status
+        return "PENDING"
+
+    def get_payment_date(self, obj):
+        if hasattr(obj, "transaction") and obj.transaction:
+            return obj.transaction.approved_at
+        return None
+    
 class FeeTrxSerializer(serializers.ModelSerializer):
     user_full_name = serializers.CharField(source="user.full_name", read_only=True)
     trx_payment_method = serializers.CharField(source="trx.payment_method", read_only=True)
@@ -374,6 +469,25 @@ class FeeTrxSerializer(serializers.ModelSerializer):
         model = FeeAssignment
         fields = ["id", "user_full_name", "trx_payment_method", "trx_ref", "trx_type", "payment_status", "payment_date"]
         
+class FeeDetailSerializer(serializers.ModelSerializer):
+    supported_member = SimpleUserSerializer(read_only=True)
+    maker = SimpleUserSerializer(read_only=True)
+    checker = SimpleUserSerializer(read_only=True)
+
+    class Meta:
+        model = Fee
+        fields = [
+            "id",
+            "name",
+            "category",
+            "amount",
+            "reason",
+            "supported_member",
+            "created_date",
+            "status",
+            "maker",
+            "checker",
+        ]
 
 class FeeWithAssignmentsSerializer(serializers.ModelSerializer):
     # assignments = FeeTrxSerializer(many=True, read_only=True)

@@ -99,8 +99,8 @@ class UserAuditLog(models.Model):
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
-    # previous_status = models.CharField(max_length=20)
-    # new_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
+    new_status = models.CharField(max_length=20)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
 
@@ -149,7 +149,7 @@ class FamilyAuditLog(models.Model):
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
-    previous_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
     new_status = models.CharField(max_length=20)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
@@ -207,7 +207,7 @@ class EdirFamilyAuditLog(models.Model):
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
-    previous_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
     new_status = models.CharField(max_length=20)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
@@ -220,7 +220,7 @@ class EdirFamilyAuditLog(models.Model):
 
 
 class Edir(models.Model):
-    users = models.ManyToManyField(CustomUser, related_name="edirs", through="EdirUser", through_fields=("edir", "user"))
+    users = models.ManyToManyField(CustomUser, related_name="user_edir", through="EdirUser", through_fields=("edir", "user"))
     name = models.CharField(max_length=100)
     monthly_fee = models.FloatField()
     address = models.CharField(max_length=255, blank=True, null=True)
@@ -228,9 +228,9 @@ class Edir(models.Model):
     meeting_date = models.DateField(blank=True, null=True)
     meeting_place = models.CharField(max_length=155, blank=True, null=True)
     is_popular = models.BooleanField(default=False)
-    created_by = models.ForeignKey(
-        CustomUser, on_delete=models.SET_NULL, null=True
-    )
+    # created_by = models.ForeignKey(
+    #     CustomUser, on_delete=models.SET_NULL, null=True
+    # )
     status = models.CharField(max_length=20, choices=STATUS, default='Active')
     created_date = models.DateField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)
@@ -238,6 +238,34 @@ class Edir(models.Model):
     def __str__(self):
         return self.name
 
+class EdirChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("CREATED", "Created"),
+    )
+
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="edir_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="edir_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
 
 class EdirAuditLog(models.Model):
     ACTION_CHOICES = (
@@ -251,10 +279,11 @@ class EdirAuditLog(models.Model):
     )
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
-        CustomUser, on_delete=models.SET_NULL, null=True
-    )
-    # previous_status = models.CharField(max_length=20)
-    # new_status = models.CharField(max_length=20)
+        CustomUser, on_delete=models.CASCADE, null=True
+    ) 
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
+    new_status = models.CharField(max_length=20)
+    
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
 
@@ -267,9 +296,9 @@ class EdirAuditLog(models.Model):
 
 class EdirUser(models.Model):
     STATUS_CHOICES = [
-        ('Pending', 'Pending'),
+        # ('Pending', 'Pending'),
         ('Rejected', 'Rejected'),
-        ('Cancelled', 'Cancelled'),
+        # ('Cancelled', 'Cancelled'),
         ('Blocked', 'Blocked'),
         ('Active', 'Active'),
         ('Not Active', 'Not Active'),
@@ -277,16 +306,16 @@ class EdirUser(models.Model):
     ]
 
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    edir = models.ForeignKey("Edir", on_delete=models.CASCADE)
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
     is_committee = models.BooleanField(default=False)
-    maker = models.ForeignKey(
-        CustomUser, related_name="EdirUser_addedBy", on_delete=models.CASCADE
-    )
-    checker = models.ForeignKey(
-        CustomUser, related_name="EdirUser_checkedBy",
-        on_delete=models.SET_NULL, null=True, blank=True
-    )
-    reason = models.TextField(blank=True, null=True)
+    # maker = models.ForeignKey(
+    #     CustomUser, related_name="EdirUser_addedBy", on_delete=models.CASCADE
+    # )
+    # checker = models.ForeignKey(
+    #     CustomUser, related_name="EdirUser_checkedBy",
+    #     on_delete=models.SET_NULL, null=True, blank=True
+    # )
+    # reason = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
     joined_date = models.DateTimeField(null=True, blank=True)
     updated_date = models.DateTimeField(null=True, blank=True)
@@ -296,8 +325,55 @@ class EdirUser(models.Model):
         unique_together = ('user', 'edir')  # Prevent duplication
 
     def __str__(self):
-        return f"{self.user.full_name} - {self.edir.name} ({self.status})"
+        return f"{self.user.full_name} - user id: {self.user.id} - edir name: {self.edir.name} edir id: {self.edir.id} is_committee: {self.is_committee} status: {self.status}"
     
+class EdirUserChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("JOIN_REQUEST", "Join Request"),
+        ("LEAVE_REQUEST", "Leave Request"),
+        ("ADD_MEMBER", "Add Member by Admin"),
+        ("BLOCK_MEMBER", "Block Member"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("CREATED", "Created"),
+    )
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
+
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    comment = models.TextField(blank=True, null=True)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(
+        CustomUser,
+        related_name="edir_user_maker",
+        on_delete=models.CASCADE,
+        null=True,
+    )
+
+    checker = models.ForeignKey(
+        CustomUser,
+        related_name="edir_user_checker",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.full_name} - {self.action} - {self.status}"
 
 class EdirUserAuditLog(models.Model):
     ACTION_CHOICES = (
@@ -312,15 +388,18 @@ class EdirUserAuditLog(models.Model):
         ("Added by Admin", "Added by Admin"),
         ("Creator Added when Create Edir", "Creator Added when Create Edir"),
     )
-    edirUser = models.ForeignKey(
-        EdirUser, on_delete=models.CASCADE, related_name="edirUserLogs"
-    )
+    # edirUser = models.ForeignKey(
+    #     EdirUser, on_delete=models.CASCADE, related_name="edirUserLogs"
+    # )
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="edirUserLogs")
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, related_name="edirUserLogs")
+
     action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
-    # previous_status = models.CharField(max_length=20)
-    # new_status = models.CharField(max_length=20)
+    previous_status = models.CharField(max_length=20, null=True, blank=True)
+    new_status = models.CharField(max_length=20)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
 
@@ -328,7 +407,7 @@ class EdirUserAuditLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.edirUser.user.full_name} - {self.action}"
+        return f"{self.user.full_name} -({self.edir.name}) - {self.action}"
 
     
 # class CustomGroup(models.Model):
@@ -370,16 +449,46 @@ class Bank(models.Model):
     bank_name = models.CharField(max_length=50 ) #choices=BANKS
     account_name = models.CharField(max_length=255)
     account_number = models.CharField(max_length=20)
-    maker = models.ForeignKey(
-        CustomUser, related_name="bank_maker", on_delete=models.CASCADE
-    )
-    checker = models.ForeignKey(
-        CustomUser, related_name="bank_checker",
-        on_delete=models.SET_NULL, null=True, blank=True
-    )
+    # maker = models.ForeignKey(
+    #     CustomUser, related_name="bank_maker", on_delete=models.CASCADE
+    # )
+    # checker = models.ForeignKey(
+    #     CustomUser, related_name="bank_checker",
+    #     on_delete=models.SET_NULL, null=True, blank=True
+    # )
     status = models.CharField(max_length=15, choices=STATUS, default="Active")
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)
+
+
+class BankChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    bank = models.ForeignKey(Bank, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="bank_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="bank_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
 
     
 class BankAuditLog(models.Model):
@@ -397,7 +506,7 @@ class BankAuditLog(models.Model):
     #     # ("CANCELLED", "Cancelled"),
     # )
     bank = models.ForeignKey(
-        Bank, on_delete=models.CASCADE, related_name="bankLogs"
+        Bank, on_delete=models.SET_NULL, null=True, blank=True, related_name="bankLogs"
     )
     action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
@@ -405,6 +514,7 @@ class BankAuditLog(models.Model):
     )
     previous_status = models.CharField(max_length=20, null=True, blank=True)
     new_status = models.CharField(max_length=20)
+
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
 
@@ -451,8 +561,12 @@ class Fee(models.Model):
         ('Pending', 'Pending'),
         ('Rejected', 'Rejected'),
     ]
+    Fee_Type = [
+        ('Expense', 'Expense'),
+        ('Income', 'Income'),
+    ]
 
-    edir = models.ForeignKey("Edir", on_delete=models.CASCADE, related_name="fees")
+    edir = models.ForeignKey("Edir", on_delete=models.CASCADE, related_name="fee_edir")
     name = models.CharField(max_length=100, blank=True, null=True) 
     supported_member = models.ForeignKey(
         CustomUser, related_name="fee_supported_member",
@@ -470,7 +584,8 @@ class Fee(models.Model):
         on_delete=models.SET_NULL, null=True, blank=True
     )
 
-    status = models.CharField(max_length=15, choices=STATUS, default="Active")
+    fee_type = models.CharField(max_length=20, choices=Fee_Type, default="Income")
+    status = models.CharField(max_length=30, choices=STATUS, default="Active")
     payment_date = models.DateTimeField(null=True, blank=True)
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)
@@ -484,6 +599,9 @@ class FeeAuditLog(models.Model):
         ("CREATED", "Created"),
         ("MODIFIED", "Modified"),
         ("Disabled", "Disabled"),
+        ("Added Expense", "Added Expense"),
+        ("Approved Expense", "Approved Expense"),
+        ("Rejected Expense", "Rejected Expense"),
         # ("CANCELLED", "Cancelled"),
     )
     fee = models.ForeignKey(
@@ -493,10 +611,12 @@ class FeeAuditLog(models.Model):
     performed_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True
     )
+    previous_status = models.CharField(max_length=50, null=True, blank=True)
+    new_status = models.CharField(max_length=50)
     old_value = models.JSONField(null=True, blank=True)
     new_value = models.JSONField(null=True, blank=True)
 
-    # comment = models.TextField(blank=True, null=True)
+    comment = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -516,7 +636,7 @@ class Transaction(models.Model):
         ("REJECTED", "Rejected"),
     )
 
-    # feeAssignment = models.ManyToManyField(FeeAssignment, related_name="feeAssignments")
+    edir = models.ForeignKey(Edir, related_name="trx_edir", on_delete=models.CASCADE)
     # reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     reference = models.CharField(
         max_length=16,
@@ -572,13 +692,13 @@ class TrxAuditLog(models.Model):
 
 
 class FeeAssignment(models.Model):
-    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="assignments")
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="feeassignment_fee")
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, blank=True, null=True)
     maker = models.ForeignKey(
         CustomUser, related_name="fee_assigned_by", on_delete=models.CASCADE
     )
     created_date = models.DateTimeField(auto_now_add=True)
-    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='trx', null=True, blank=True)
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='feeassignment_trx', null=True, blank=True)
 
     
 class FeeAssignAuditLog(models.Model):
