@@ -1,6 +1,6 @@
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, EdirChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction, BankChangeRequest
+from .models import CustomUser, EdirChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest
 import calendar
 from datetime import date
 from django.db.models import Sum
@@ -92,6 +92,12 @@ class FamilyWithUserSerializer(serializers.ModelSerializer):
 #             "created_date", "meeting_date", "meeting_place",
 #         ]
 #         read_only_fields = ["id", "created_date", ]
+class BankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bank
+        fields = [
+            'id', 'bank_name', 'account_number', 'account_name','status',
+        ]
 
 
 class EdirSerializer(serializers.ModelSerializer):
@@ -126,6 +132,7 @@ class EdirSerializer(serializers.ModelSerializer):
         
 class EdirChangeRequestSerializer(serializers.ModelSerializer):
     maker = SimpleUserSerializer(read_only=True)
+    edir = EdirSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
         format="%Y-%m-%d %H:%M:%S",
@@ -136,6 +143,7 @@ class EdirChangeRequestSerializer(serializers.ModelSerializer):
         model = EdirChangeRequest
         fields = [
             "id",
+            "edir",
             "action",
             "new_value",
             "old_value",
@@ -146,6 +154,7 @@ class EdirChangeRequestSerializer(serializers.ModelSerializer):
 
 class BankChangeRequestSerializer(serializers.ModelSerializer):
     maker = SimpleUserSerializer(read_only=True)
+    bank = BankSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
         format="%Y-%m-%d %H:%M:%S",
@@ -156,12 +165,134 @@ class BankChangeRequestSerializer(serializers.ModelSerializer):
         model = BankChangeRequest
         fields = [
             "id",
+            "bank",
             "action",
             "new_value",
             "old_value",
             "maker",
             "created_at",
         ]
+
+class FeeChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleUserSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = FeeChangeRequest
+        fields = [
+            "id",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        new_value = data.get("new_value")
+        old_value = data.get("old_value")
+        if new_value and new_value.get("supported_member"):
+            user_id = new_value["supported_member"]
+
+            try:
+                user = CustomUser.objects.get(id=user_id)
+                new_value["supported_member"] = {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+            except CustomUser.DoesNotExist:
+                pass
+        if old_value and old_value.get("supported_member"):
+            user_id = old_value["supported_member"]
+
+            try:
+                user = CustomUser.objects.get(id=user_id)
+                old_value["supported_member"] = {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+            except CustomUser.DoesNotExist:
+                pass
+
+        if new_value and new_value.get("users"):
+            user_ids = new_value["users"]
+
+            users = CustomUser.objects.filter(id__in=user_ids)
+            new_value["users"] = [
+                {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+                for user in users
+            ]
+
+        if old_value and old_value.get("users"):
+            user_ids = old_value["users"]
+
+            users = CustomUser.objects.filter(id__in=user_ids)
+            old_value["users"] = [
+                {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+                for user in users
+            ]
+
+        return data
+
+class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleUserSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = ExpenseChangeRequest
+        fields = [
+            "id",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        new_value = data.get("new_value")
+        old_value = data.get("old_value")
+        if new_value and new_value.get("supportedMember"):
+            user_id = new_value["supportedMember"]
+
+            try:
+                user = CustomUser.objects.get(id=user_id)
+                new_value["supportedMember"] = {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+            except CustomUser.DoesNotExist:
+                pass
+        if old_value and old_value.get("supported_member"):
+            user_id = old_value["supported_member"]
+
+            try:
+                user = CustomUser.objects.get(id=user_id)
+                old_value["supported_member"] = {
+                    "id": user.id,
+                    "full_name": user.full_name
+                }
+            except CustomUser.DoesNotExist:
+                pass
+
+        return data
+
 
 class EdirWithUsersSerializer(serializers.ModelSerializer):
     users = serializers.PrimaryKeyRelatedField(read_only=True, many=True)
@@ -181,17 +312,35 @@ class EdirWithUsersSerializer(serializers.ModelSerializer):
 
 
 class BankWithEdirSerializer(serializers.ModelSerializer):
+    has_edit_pending = serializers.SerializerMethodField()
+    has_disable_pending = serializers.SerializerMethodField()
     class Meta:
         model = Bank
         fields = [
-            'id', 'bank_name', 'account_number', 'account_name','status', 'edir', 
+            'id', 
+            'bank_name', 
+            'account_number', 
+            'account_name',
+            'status', 
+            'edir', 
+            'has_edit_pending',
+            'has_disable_pending',
         ]
-class BankSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Bank
-        fields = [
-            'id', 'bank_name', 'account_number', 'account_name','status',
-        ]
+    
+    def get_has_edit_pending(self, obj):
+        return BankChangeRequest.objects.filter(
+            bank=obj,
+            action="UPDATE",
+            status="PENDING"
+        ).exists()
+
+    def get_has_disable_pending(self, obj):
+        return BankChangeRequest.objects.filter(
+            bank=obj,
+            action="DISABLE",
+            status="PENDING"
+        ).exists()
+
 
 
 # class PaymentSerializer(serializers.ModelSerializer):
@@ -471,8 +620,8 @@ class FeeTrxSerializer(serializers.ModelSerializer):
         
 class FeeDetailSerializer(serializers.ModelSerializer):
     supported_member = SimpleUserSerializer(read_only=True)
-    maker = SimpleUserSerializer(read_only=True)
-    checker = SimpleUserSerializer(read_only=True)
+    has_edit_pending = serializers.SerializerMethodField()
+    has_disable_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = Fee
@@ -483,11 +632,25 @@ class FeeDetailSerializer(serializers.ModelSerializer):
             "amount",
             "reason",
             "supported_member",
+            "payment_date",
             "created_date",
             "status",
-            "maker",
-            "checker",
+            "has_edit_pending",
+            "has_disable_pending",
         ]
+    def get_has_edit_pending(self, obj):
+        return FeeChangeRequest.objects.filter(
+            fee=obj,
+            action="UPDATE",
+            status="PENDING"
+        ).exists()
+
+    def get_has_disable_pending(self, obj):
+        return FeeChangeRequest.objects.filter(
+            fee=obj,
+            action="DISABLE",
+            status="PENDING"
+        ).exists()
 
 class FeeWithAssignmentsSerializer(serializers.ModelSerializer):
     # assignments = FeeTrxSerializer(many=True, read_only=True)

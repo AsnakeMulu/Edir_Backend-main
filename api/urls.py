@@ -54,6 +54,8 @@ urlpatterns = [
     path('join_edir/<int:edir_id>/', views.join_edir, name='join-edir'), 
     path('edir_request/<int:edir_id>/<str:status>', views.update_edir_request, name='update-edir-request'), 
     path('edir_cancel_request/<int:edir_id>/', views.cancel_edir_request, name='cancel-edir-request'),
+    path('edir_leave/<int:edir_id>/', views.leave_edir, name='leave-edir'),
+    path('edir_disable/<int:edir_id>/', views.disable_edir, name='disable-edir'),
     path("edir/list/", views.list_edirs, name="list_edirs"),
 
     path("edir/<int:edir_id>/", views.dashboard, name="edir-detail"),
@@ -69,17 +71,23 @@ urlpatterns = [
     path("expense/detail/<int:fee_id>/", views.get_expense_detail, name="get-expense-detail"),
     path("add_expense/<int:edir_id>/", views.add_expense, name="add-expense"),
     path("expense/update/<int:fee_id>/", views.update_expense, name="update-expense"),
-    path('approve_expense/<int:expense_id>/', views.approve_expense, name='approve-expense'),
-    path('reject_expense/<int:expense_id>/', views.reject_expense, name='reject-expense'),
+    path('approve_expense/<int:id>/', views.approve_expense, name='approve-expense'),
+    path('reject_expense/<int:id>/', views.reject_expense, name='reject-expense'),
 
     path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
     # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
     path("edir/incomes/<int:edir_id>/", views.get_daily_edir_incomes, name="get-daily-edir-incomes"),
 
     #Fee related endpoints
-    path("fees/create/<int:edir_id>/", views.create_fee, name="create-fees"),
-    path("fees/update/<int:fee_id>/", views.update_fee, name="update-fees"),
+    path("fee/create/<int:edir_id>/", views.create_fee, name="create-fees"),
+    path("fee/detail/<int:fee_id>/", views.get_fee_detail, name="get-fee-detail"),
+    path("fee/update/<int:fee_id>/", views.update_fee, name="update-fees"),
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
+    path('approve_fee/<int:id>/', views.approve_fee, name='approve-fee'),
+    path('reject_fee/<int:id>/', views.reject_fee, name='reject-fee'),
+    path("fee_request/detail/<int:id>/", views.get_fee_request_detail, name="get-fee-request-detail"),
+    path("fee_disable/<int:fee_id>/", views.disable_fee, name="disable-fee"),
+
     path("fees/unpaid/<int:edir_id>/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"),
     path("fees/paid/<str:trx_ref>/", views.get_paid_fees, name="get_paid_fees"),
     path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),

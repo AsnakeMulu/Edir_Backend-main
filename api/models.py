@@ -315,7 +315,7 @@ class EdirUser(models.Model):
     #     CustomUser, related_name="EdirUser_checkedBy",
     #     on_delete=models.SET_NULL, null=True, blank=True
     # )
-    # reason = models.TextField(blank=True, null=True)
+    leave_reason = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
     joined_date = models.DateTimeField(null=True, blank=True)
     updated_date = models.DateTimeField(null=True, blank=True)
@@ -560,6 +560,7 @@ class Fee(models.Model):
         ('Active', 'Active'),
         ('Pending', 'Pending'),
         ('Rejected', 'Rejected'),
+        ('Completed', 'Completed'),
     ]
     Fee_Type = [
         ('Expense', 'Expense'),
@@ -573,26 +574,86 @@ class Fee(models.Model):
         on_delete=models.SET_NULL, null=True, blank=True
     )
     category = models.CharField(max_length=30, choices=CATEGORY, default="Monthly Fee")
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount = models.IntegerField()
     reason = models.TextField(blank=True, null=True)
 
-    maker = models.ForeignKey(
-        CustomUser, related_name="fee_maker", on_delete=models.CASCADE
-    )
-    checker = models.ForeignKey(
-        CustomUser, related_name="fee_checker",
-        on_delete=models.SET_NULL, null=True, blank=True
-    )
+    # maker = models.ForeignKey(
+    #     CustomUser, related_name="fee_maker", on_delete=models.CASCADE
+    # )
+    # checker = models.ForeignKey(
+    #     CustomUser, related_name="fee_checker",
+    #     on_delete=models.SET_NULL, null=True, blank=True
+    # )
 
     fee_type = models.CharField(max_length=20, choices=Fee_Type, default="Income")
     status = models.CharField(max_length=30, choices=STATUS, default="Active")
-    payment_date = models.DateTimeField(null=True, blank=True)
+    payment_date = models.DateField(null=True, blank=True)
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.category}, Supported Member = {self.supported_member}, {self.name} {self.amount} Birr, reason = {self.reason}, Maker - {self.maker}, Payment date - {self.payment_date}"
+        return f"{self.category}, Supported Member = {self.supported_member}, {self.name}, {self.amount} Birr, reason = {self.reason}, Payment date - {self.payment_date}"
     
+
+class ExpenseChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    fee = models.ForeignKey(Fee, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="expense_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="expense_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+
+class FeeChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    fee = models.ForeignKey(Fee, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="fee_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="fee_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
 
 class FeeAuditLog(models.Model):
     ACTION_CHOICES = (
@@ -605,7 +666,7 @@ class FeeAuditLog(models.Model):
         # ("CANCELLED", "Cancelled"),
     )
     fee = models.ForeignKey(
-        Fee, on_delete=models.CASCADE, related_name="feeLogs"
+        Fee, on_delete=models.SET_NULL, null=True, blank=True, related_name="feeLogs"
     )
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     performed_by = models.ForeignKey(
@@ -634,6 +695,7 @@ class Transaction(models.Model):
         ("PENDING", "Pending"),
         ("APPROVED", "Approved"),
         ("REJECTED", "Rejected"),
+        ("COMPLETED", "Completed")
     )
 
     edir = models.ForeignKey(Edir, related_name="trx_edir", on_delete=models.CASCADE)
@@ -645,20 +707,50 @@ class Transaction(models.Model):
         default=generate_reference
     )
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE)
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.IntegerField()#max_digits=12, decimal_places=2
     payment_method = models.CharField(max_length=50, blank=True, null=True) 
     bank = models.ForeignKey(Bank, on_delete=models.CASCADE, related_name="bank", blank=True, null=True)
     image = models.ImageField(upload_to='images/', null=True, blank=True) 
-    maker = models.ForeignKey(
-        CustomUser, related_name="trx_made_by", on_delete=models.CASCADE
-    )
-    checker = models.ForeignKey(
-        CustomUser, related_name="trx_checked_by",
-        on_delete=models.SET_NULL, null=True, blank=True
-    )
+    # maker = models.ForeignKey(
+    #     CustomUser, related_name="trx_made_by", on_delete=models.CASCADE
+    # )
+    # checker = models.ForeignKey(
+    #     CustomUser, related_name="trx_checked_by",
+    #     on_delete=models.SET_NULL, null=True, blank=True
+    # )
 
     payment_status = models.CharField(max_length=10, choices=STATUS, default="PENDING")
     reason = models.TextField(blank=True, null=True)  # for rejection
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+
+class TransactionChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    trx = models.ForeignKey(Transaction, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="trx_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="trx_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     approved_at = models.DateTimeField(null=True, blank=True)
 
@@ -692,13 +784,20 @@ class TrxAuditLog(models.Model):
 
 
 class FeeAssignment(models.Model):
+    STATUS_CHOICES = (
+        ("Disabled", "Disabled"),
+        ("Active", "Active"),
+        # ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
     fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="feeassignment_fee")
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, blank=True, null=True)
-    maker = models.ForeignKey(
-        CustomUser, related_name="fee_assigned_by", on_delete=models.CASCADE
+    transaction_change_request = models.ForeignKey(
+        TransactionChangeRequest, related_name="fee_assignments_trx_request", on_delete=models.SET_NULL, null=True, blank=True
     )
+    transaction = models.ForeignKey(Transaction, on_delete=models.SET_NULL, related_name='feeassignment_trx', null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="Active")
     created_date = models.DateTimeField(auto_now_add=True)
-    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='feeassignment_trx', null=True, blank=True)
 
     
 class FeeAssignAuditLog(models.Model):
