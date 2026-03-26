@@ -75,8 +75,8 @@ DJOSER = {
     'USER_CREATE_PASSWORD_RETYPE': True,
     'SERIALIZERS': {
         'user_create': 'api.serializers.UserCreateSerializer',
-        'user': 'api.serializers.UserWithNumFamSerializer',
-        'current_user': 'api.serializers.UserWithNumFamSerializer',
+        'user': 'api.serializers.UserWithRoleSerializer',
+        'current_user': 'api.serializers.UserWithRoleSerializer',
     },
 }
 SIMPLE_JWT = {

@@ -5,8 +5,8 @@ from .models import CustomUser, Help, Event, Edir
 # @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
-    list_display = ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'address', 'is_staff', 'is_active' ) #,
-    list_filter = ('address', 'gender', 'is_staff', 'gender',) 
+    list_display = ('phone_number', 'is_staff', 'is_active' ) # 'full_name', 'gender', 'marital_status', 'profession', 'address',
+    # list_filter = ('address', 'gender', 'is_staff', 'gender',) 
     fieldsets = (
         (None, {'fields': ('phone_number', 'password')}),
         ('Permissions', {'fields': ( 'groups', 'user_permissions', 'is_staff', 'is_active', 'is_superuser')}), #

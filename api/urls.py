@@ -10,7 +10,7 @@ urlpatterns = [
     path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'),
     
-    path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'),
+    path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'), #removed
     path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'),
     path('user/register/', views.self_register, name='user-register'),
     path("user/<int:user_id>/<int:edir_id>/deactivate/", views.deactivate_member, name="deactivate-member"),
@@ -23,7 +23,7 @@ urlpatterns = [
     path('set-password/<uidb64>/<token>/', views.set_password, name='set-password'),
     
     path('check_user_phone/<int:phone_number>/', views.check_user_phone, name='check_user_phone'),
-    path('check_user_phoneNumber/<int:phone_number>/', views.check_user_phoneNumber, name='check_user_phoneNumber'),
+    path('check_user_phoneNumber/<int:phone_number>/', views.check_user_phoneNumber, name='check_user_phoneNumber'), #will be removed
     path('check_phone/', views.check_phone, name='check_phone'),
     path('set_new_password/', views.set_new_password, name='set_new_password'),
     path('auth/change-password/', views.change_password, name='change-password'),
@@ -49,6 +49,7 @@ urlpatterns = [
     #Edir related endpoints
     path("edir/add/", views.add_edir, name="add_edir"),
     path("user/", views.get_user_with_edirs, name="user-with-edirs"),
+    path("user_edirs/", views.get_user_edirs, name="user-edirs"),
     path("popular_edirs/", views.get_popular_edirs, name="popular-edirs"),
     path("requested_edirs/", views.get_requested_edirs, name="requested-edirs"),
     path('join_edir/<int:edir_id>/', views.join_edir, name='join-edir'), 
@@ -73,6 +74,7 @@ urlpatterns = [
     path("expense/update/<int:fee_id>/", views.update_expense, name="update-expense"),
     path('approve_expense/<int:id>/', views.approve_expense, name='approve-expense'),
     path('reject_expense/<int:id>/', views.reject_expense, name='reject-expense'),
+    path("expense_disable/<int:fee_id>/", views.disable_expense, name="disable-expense"),
 
     path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
     # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),

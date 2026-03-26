@@ -29,18 +29,18 @@ STATUS = [
 #         return user
 class CustomUserManager(BaseUserManager):
     def create_user(
-        self, phone_number, full_name, password=None,
-        gender=None, marital_status=None, address=None, **extra_fields
+        self, phone_number, password=None, **extra_fields,
+        # gender=None, full_name, marital_status=None, address=None
     ):
         if not phone_number:
             raise ValueError("The Phone Number must be set")
 
         user = self.model(
             phone_number=phone_number,
-            full_name=full_name,
-            gender=gender,
-            marital_status=marital_status,
-            address=address,
+            # full_name=full_name,
+            # gender=gender,
+            # marital_status=marital_status,
+            # address=address,
             **extra_fields
         )
         if password:
@@ -50,27 +50,27 @@ class CustomUserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, phone_number, full_name, password=None, gender = None, 
-                    marital_status = None, address = None, **extra_fields):
+    def create_superuser(self, phone_number,  password=None, **extra_fields):
+                    # marital_status = None, full_name, address = None, gender = None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
-        extra_fields.setdefault("is_superuser", True)
+        # extra_fields.setdefault("is_superuser", True)
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
-        if extra_fields.get("is_superuser") is not True:
-            raise ValueError("Superuser must have is_superuser=True.")
+        # if extra_fields.get("is_superuser") is not True:
+        #     raise ValueError("Superuser must have is_superuser=True.")
 
-        return self.create_user(phone_number, full_name, password, gender = gender,
-                           marital_status = marital_status, address = address, **extra_fields)
+        return self.create_user(phone_number,  password, **extra_fields)
+                        #    marital_status = marital_status, full_name = full_name, gender = gender, address = address, **extra_fields)
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
-    full_name = models.CharField(max_length=100)
     phone_number = models.CharField(max_length=15, unique=True)
-    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
-    marital_status = models.CharField(max_length=20, choices=MARITAL_STATUS_CHOICES, blank=True, null=True)
-    profession = models.CharField(max_length=100, blank=True, null=True)
-    # email = models.EmailField( blank=True, null=True) #unique=True,
-    address = models.CharField(max_length=255, blank=True, null=True)
+    # full_name = models.CharField(max_length=100)
+    # gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    # marital_status = models.CharField(max_length=20, choices=MARITAL_STATUS_CHOICES, blank=True, null=True)
+    # profession = models.CharField(max_length=100, blank=True, null=True)
+    # # email = models.EmailField( blank=True, null=True) #unique=True,
+    # address = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     created_date = models.DateTimeField(auto_now_add=True)
@@ -84,6 +84,35 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return self.phone_number
     
+
+class UserChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("CREATED", "Created"),
+    )
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(CustomUser, related_name="user_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(CustomUser, related_name="user_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
 
 class UserAuditLog(models.Model):
     ACTION_CHOICES = (
@@ -109,114 +138,6 @@ class UserAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user.full_name} - {self.action}"
-
-
-class Family(models.Model):
-    RELATIONSHIP_CHOICES = [
-        ('Partner', 'Partner'),
-        ('Child', 'Child'),
-        ('Parent', 'Parent'),
-        ('Sibling', 'Sibling'),
-        ('Partner Parent', 'Partner Parent'),
-        ('Partner Sibling', 'Partner Sibling'),
-    ]
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='family', null=True, blank=True)
-    full_name = models.CharField(max_length=255)
-    gender = models.CharField(max_length=10, choices=GENDER_CHOICES)
-    relationship = models.CharField(max_length=50, choices=RELATIONSHIP_CHOICES)
-    profession = models.CharField(max_length=100, blank=True, null=True)
-    
-    status = models.CharField(max_length=15, choices=STATUS, default="Active")
-    created_date = models.DateTimeField(auto_now_add=True)
-    updated_date = models.DateTimeField(null=True, blank=True)
-
-    def __str__(self):
-        owner = self.user.full_name if self.user else self.full_name
-        return f"{self.full_name} ({self.relationship} of {owner})"
-
-
-class FamilyAuditLog(models.Model):
-    ACTION_CHOICES = (
-        ("CREATED", "Created"),
-        ("MODIFIED", "Modified"),
-        ("Loaded","Loaded"),
-        ("Disabled", "Disabled"),
-    )
-    family = models.ForeignKey(
-        Family, on_delete=models.CASCADE, related_name="familyLogs"
-    )
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    performed_by = models.ForeignKey(
-        CustomUser, on_delete=models.SET_NULL, null=True
-    )
-    previous_status = models.CharField(max_length=20, null=True, blank=True)
-    new_status = models.CharField(max_length=20)
-    old_value = models.JSONField(null=True, blank=True)
-    new_value = models.JSONField(null=True, blank=True)
-
-    comment = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.family.full_name} - {self.action}"
-
-
-
-class EdirFamily(models.Model):
-    STATUS_CHOICES = [
-        ('Pending', 'Pending'),
-        ('Rejected', 'Rejected'),
-        ('Cancelled', 'Cancelled'),
-        ('Blocked', 'Blocked'),
-        ('Active', 'Active'),
-        ('Not Active', 'Not Active'),
-    ]
-
-    family = models.ForeignKey(Family, on_delete=models.CASCADE)
-    edir = models.ForeignKey("Edir", on_delete=models.CASCADE)
-    maker = models.ForeignKey(
-        CustomUser, related_name="EdirFamily_addedBy", on_delete=models.CASCADE
-    )
-    checker = models.ForeignKey(
-        CustomUser, related_name="EdirFamily_checkedBy",
-        on_delete=models.SET_NULL, null=True, blank=True
-    )
-    reason = models.TextField(blank=True, null=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
-    joined_date = models.DateTimeField(null=True, blank=True)
-    updated_date = models.DateTimeField(null=True, blank=True)
-
-    # class Meta:
-    #     db_table = "customuser_edirs"
-    #     unique_together = ('user', 'edir')  # Prevent duplication
-
-    def __str__(self):
-        return f"{self.family.full_name} - {self.edir.name} ({self.status})"
-    
-
-class EdirFamilyAuditLog(models.Model):
-    ACTION_CHOICES = (
-        ("CREATED", "Created"),
-        ("MODIFIED", "Modified"),
-        ("Disabled", "Disabled"),
-    )
-    edirFamily = models.ForeignKey(
-        EdirFamily, on_delete=models.CASCADE, related_name="edirFamilyLogs"
-    )
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    performed_by = models.ForeignKey(
-        CustomUser, on_delete=models.SET_NULL, null=True
-    )
-    previous_status = models.CharField(max_length=20, null=True, blank=True)
-    new_status = models.CharField(max_length=20)
-    old_value = models.JSONField(null=True, blank=True)
-    new_value = models.JSONField(null=True, blank=True)
-
-    comment = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.edirFamily.family.full_name} - {self.action}"
 
 
 class Edir(models.Model):
@@ -306,15 +227,16 @@ class EdirUser(models.Model):
     ]
 
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
+    edir = models.ForeignKey(Edir, on_delete=models.SET_NULL, blank=True, null=True)
+    phone_number = models.CharField(max_length=15)
+    full_name = models.CharField(max_length=100)
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    marital_status = models.CharField(max_length=20, choices=MARITAL_STATUS_CHOICES, blank=True, null=True)
+    profession = models.CharField(max_length=100, blank=True, null=True)
+    address = models.CharField(max_length=255, blank=True, null=True)
+    image = models.ImageField(upload_to='images/', null=True, blank=True) 
+
     is_committee = models.BooleanField(default=False)
-    # maker = models.ForeignKey(
-    #     CustomUser, related_name="EdirUser_addedBy", on_delete=models.CASCADE
-    # )
-    # checker = models.ForeignKey(
-    #     CustomUser, related_name="EdirUser_checkedBy",
-    #     on_delete=models.SET_NULL, null=True, blank=True
-    # )
     leave_reason = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
     joined_date = models.DateTimeField(null=True, blank=True)
@@ -325,7 +247,9 @@ class EdirUser(models.Model):
         unique_together = ('user', 'edir')  # Prevent duplication
 
     def __str__(self):
-        return f"{self.user.full_name} - user id: {self.user.id} - edir name: {self.edir.name} edir id: {self.edir.id} is_committee: {self.is_committee} status: {self.status}"
+        user_name = getattr(self, 'full_name', None) or getattr(self.user, 'phone_number', 'Unknown')
+        edir_name = getattr(self.edir, 'name', 'No Edir') if self.edir else 'No Edir'
+        return f"{user_name} - user id: {self.user.id} - edir name: {edir_name} - is_committee: {self.is_committee} - status: {self.status}"
     
 class EdirUserChangeRequest(models.Model):
     ACTION_CHOICES = (
@@ -342,8 +266,9 @@ class EdirUserChangeRequest(models.Model):
         ("CREATED", "Created"),
     )
 
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
+    # user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    # edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
+    edir_user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
     comment = models.TextField(blank=True, null=True)
@@ -427,6 +352,164 @@ class EdirUserAuditLog(models.Model):
 #     class Meta:
 #         db_table = "customuser_groups"  # 👈 single table name
 #         unique_together = ("user", "group")
+
+
+class Family(models.Model):
+    RELATIONSHIP_CHOICES = [
+        ('Partner', 'Partner'),
+        ('Child', 'Child'),
+        ('Parent', 'Parent'),
+        ('Sibling', 'Sibling'),
+        ('Partner Parent', 'Partner Parent'),
+        ('Partner Sibling', 'Partner Sibling'),
+    ]
+    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, related_name='family', null=True, blank=True)
+    full_name = models.CharField(max_length=255)
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES)
+    relationship = models.CharField(max_length=50, choices=RELATIONSHIP_CHOICES)
+    profession = models.CharField(max_length=100, blank=True, null=True)
+    
+    status = models.CharField(max_length=15, choices=STATUS, default="Active")
+    created_date = models.DateTimeField(auto_now_add=True)
+    updated_date = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        owner = self.user.full_name if self.user else self.full_name
+        return f"{self.full_name} ({self.relationship} of {owner})"
+
+ 
+class FamilyChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "UPDATE"),
+        ("DISABLE", "Disable"),
+        # ("BLOCK_MEMBER", "Block Member"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+
+    # user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    # edir = models.ForeignKey(Edir, on_delete=models.CASCADE)
+    family = models.ForeignKey(Family, on_delete=models.CASCADE)
+    edir_user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    comment = models.TextField(blank=True, null=True)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(
+        CustomUser,
+        related_name="family_maker",
+        on_delete=models.CASCADE,
+        null=True,
+    )
+
+    checker = models.ForeignKey(
+        CustomUser,
+        related_name="family_checker",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.full_name} - {self.action} - {self.status}"
+
+# class FamilyAuditLog(models.Model):
+#     ACTION_CHOICES = (
+#         ("CREATED", "Created"),
+#         ("MODIFIED", "Modified"),
+#         ("Loaded","Loaded"),
+#         ("Disabled", "Disabled"),
+#     )
+#     family = models.ForeignKey(
+#         Family, on_delete=models.CASCADE, related_name="familyLogs"
+#     )
+#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+#     performed_by = models.ForeignKey(
+#         CustomUser, on_delete=models.SET_NULL, null=True
+#     )
+#     previous_status = models.CharField(max_length=20, null=True, blank=True)
+#     new_status = models.CharField(max_length=20)
+#     old_value = models.JSONField(null=True, blank=True)
+#     new_value = models.JSONField(null=True, blank=True)
+
+#     comment = models.TextField(blank=True, null=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     def __str__(self):
+#         return f"{self.family.full_name} - {self.action}"
+
+
+
+# class EdirFamily(models.Model):
+#     STATUS_CHOICES = [
+#         ('Pending', 'Pending'),
+#         ('Rejected', 'Rejected'),
+#         ('Cancelled', 'Cancelled'),
+#         ('Blocked', 'Blocked'),
+#         ('Active', 'Active'),
+#         ('Not Active', 'Not Active'),
+#     ]
+
+#     family = models.ForeignKey(Family, on_delete=models.CASCADE)
+#     edir = models.ForeignKey("Edir", on_delete=models.CASCADE)
+#     maker = models.ForeignKey(
+#         CustomUser, related_name="EdirFamily_addedBy", on_delete=models.CASCADE
+#     )
+#     checker = models.ForeignKey(
+#         CustomUser, related_name="EdirFamily_checkedBy",
+#         on_delete=models.SET_NULL, null=True, blank=True
+#     )
+#     reason = models.TextField(blank=True, null=True)
+#     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
+#     joined_date = models.DateTimeField(null=True, blank=True)
+#     updated_date = models.DateTimeField(null=True, blank=True)
+
+#     # class Meta:
+#     #     db_table = "customuser_edirs"
+#     #     unique_together = ('user', 'edir')  # Prevent duplication
+
+#     def __str__(self):
+#         return f"{self.family.full_name} - {self.edir.name} ({self.status})"
+    
+
+# class EdirFamilyAuditLog(models.Model):
+#     ACTION_CHOICES = (
+#         ("CREATED", "Created"),
+#         ("MODIFIED", "Modified"),
+#         ("Disabled", "Disabled"),
+#     )
+#     edirFamily = models.ForeignKey(
+#         EdirFamily, on_delete=models.CASCADE, related_name="edirFamilyLogs"
+#     )
+#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+#     performed_by = models.ForeignKey(
+#         CustomUser, on_delete=models.SET_NULL, null=True
+#     )
+#     previous_status = models.CharField(max_length=20, null=True, blank=True)
+#     new_status = models.CharField(max_length=20)
+#     old_value = models.JSONField(null=True, blank=True)
+#     new_value = models.JSONField(null=True, blank=True)
+
+#     comment = models.TextField(blank=True, null=True)
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     def __str__(self):
+#         return f"{self.edirFamily.family.full_name} - {self.action}"
+
 
 
 class Bank(models.Model):
@@ -558,9 +641,9 @@ class Fee(models.Model):
     ]
     STATUS = [
         ('Active', 'Active'),
-        ('Pending', 'Pending'),
-        ('Rejected', 'Rejected'),
-        ('Completed', 'Completed'),
+        ('Not Active', 'Not Active'),
+        # ('Rejected', 'Rejected'),
+        # ('Completed', 'Completed'),
     ]
     Fee_Type = [
         ('Expense', 'Expense'),
@@ -695,7 +778,8 @@ class Transaction(models.Model):
         ("PENDING", "Pending"),
         ("APPROVED", "Approved"),
         ("REJECTED", "Rejected"),
-        ("COMPLETED", "Completed")
+        ("COMPLETED", "Completed"),
+        ("Paid", "Paid")
     )
 
     edir = models.ForeignKey(Edir, related_name="trx_edir", on_delete=models.CASCADE)
