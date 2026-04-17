@@ -1,6 +1,8 @@
+from urllib import request
+
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, EdirChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest
+from .models import CustomUser, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest
 import calendar
 from datetime import date
 from django.db.models import Sum
@@ -16,11 +18,48 @@ class UserCreateSerializer(BaseUserCreateSerializer):
         if not value.isdigit():
             raise serializers.ValidationError("Phone number must contain only digits.")
         return value
+    
+
+class EdirSerializer(serializers.ModelSerializer):
+    meeting_date = serializers.DateField(
+        input_formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"],
+        required=False,
+        allow_null=True,
+    )
+    class Meta:
+        model = Edir
+        fields = [ 
+            # "created_by", 
+            "is_popular", 
+            "status", 
+            "updated_date",
+            "id",
+            "name",
+            "monthly_fee",
+            "address",
+            "description",
+            "created_date",
+            "meeting_date",
+            "meeting_place",
+        ] 
+        read_only_fields = (
+            # "created_by",
+            "created_date",
+            "updated_date",
+            "is_popular",
+            "status",
+        )
+
 
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ["id", "full_name", "phone_number"]
+        fields = ["id", "phone_number"] # "full_name",
+
+class SimpleEdirUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EdirUser
+        fields = ["id", "full_name", "phone_number"] # 
 
 class UserWithRoleSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
@@ -86,31 +125,33 @@ class UserWithRoleSerializer(serializers.ModelSerializer):
         return "Edir Member"
 
 class EdirUserWithNumFamSerializer(serializers.ModelSerializer):
-    # number_of_family = serializers.SerializerMethodField()
-    # is_committee = serializers.SerializerMethodField()
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    edir = EdirSerializer(read_only=True)
     membership_status = serializers.SerializerMethodField()
+    
+    has_edit_pending = serializers.SerializerMethodField()
+    has_disable_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = EdirUser
         fields = [
             'id',
             'edir',
+            'user_id',
             'full_name',
             'phone_number',
             'gender',
             'marital_status',
             'profession',
             'address',
-            # 'number_of_family',
+            'status',
             'is_committee',
             'membership_status',
+            'has_edit_pending',
+            'has_disable_pending'
+
         ]
 
-    # def get_number_of_family(self, obj):
-    #     family = getattr(obj, "family", None)
-    #     if family is None:
-    #         return 0
-    #     return family.filter(status="Active").count()
     def get_membership_status(self, obj):
         if obj.edir is None:
             return "Not a Member"
@@ -119,12 +160,69 @@ class EdirUserWithNumFamSerializer(serializers.ModelSerializer):
             return "Committee Member"
 
         return "Edir Member"
-    # def get_is_committee(self, obj):
-    #     edir_id = self.context.get("edir_id")
-    #     if not edir_id:
-    #         return False
-    #     membership = obj.groupmembership_set.filter(group__edir_id=edir_id).first()
-    #     return membership.is_committee if membership else False
+    
+    def get_has_edit_pending(self, obj):
+        return EdirUserChangeRequest.objects.filter(
+            edir_user=obj,
+            action="UPDATE",
+            status="PENDING"
+        ).exists()
+
+    def get_has_disable_pending(self, obj):
+        return EdirUserChangeRequest.objects.filter(
+            edir_user=obj,
+            action="DISABLE",
+            status="PENDING"
+        ).exists()
+
+
+class EdirUserDetailSerializer(serializers.ModelSerializer):
+    membership_status = serializers.SerializerMethodField()
+    
+    has_edit_pending = serializers.SerializerMethodField()
+    has_disable_pending = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EdirUser
+        fields = [
+            'id',
+            'edir',
+            'user',
+            'full_name',
+            'phone_number',
+            'gender',
+            'marital_status',
+            'profession',
+            'address',
+            'status',
+            'is_committee',
+            'membership_status',
+            'has_edit_pending',
+            'has_disable_pending'
+        ]
+
+    def get_membership_status(self, obj):
+        if obj.edir is None:
+            return "Not a Member"
+
+        if obj.is_committee:
+            return "Committee Member"
+
+        return "Edir Member"
+    
+    def get_has_edit_pending(self, obj):
+        return EdirUserChangeRequest.objects.filter(
+            edir_user=obj,
+            action="UPDATE",
+            status="PENDING"
+        ).exists()
+
+    def get_has_disable_pending(self, obj):
+        return EdirUserChangeRequest.objects.filter(
+            edir_user=obj,
+            action="DISABLE",
+            status="PENDING"
+        ).exists()
 
 
 class UserWithNumFam2Serializer(serializers.ModelSerializer):
@@ -151,11 +249,27 @@ class UserWithNumFam2Serializer(serializers.ModelSerializer):
         
 
 class FamilyWithUserSerializer(serializers.ModelSerializer):
+    has_edit_pending = serializers.SerializerMethodField()
+    has_disable_pending = serializers.SerializerMethodField()
     class Meta:
         model = Family
         fields = [
-            'id', 'full_name', 'gender', 'profession', 'relationship', 'user'
+            'id', 'full_name', 'gender', 'profession', 'relationship', 'user', 'has_edit_pending', 'has_disable_pending'
         ]
+    
+    def get_has_edit_pending(self, obj):
+        return FamilyChangeRequest.objects.filter(
+            family=obj,
+            action="UPDATE",
+            status="PENDING"
+        ).exists()
+
+    def get_has_disable_pending(self, obj):
+        return FamilyChangeRequest.objects.filter(
+            family=obj,
+            action="DISABLE",
+            status="PENDING"
+        ).exists()
 
 # class AddEdirSerializer(serializers.ModelSerializer):
 #     class Meta:
@@ -172,39 +286,9 @@ class BankSerializer(serializers.ModelSerializer):
             'id', 'bank_name', 'account_number', 'account_name','status',
         ]
 
-
-class EdirSerializer(serializers.ModelSerializer):
-    meeting_date = serializers.DateField(
-        input_formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"],
-        required=False,
-        allow_null=True,
-    )
-    class Meta:
-        model = Edir
-        fields = [ 
-            # "created_by", 
-            "is_popular", 
-            "status", 
-            "updated_date",
-            "id",
-            "name",
-            "monthly_fee",
-            "address",
-            "description",
-            "created_date",
-            "meeting_date",
-            "meeting_place",
-        ] 
-        read_only_fields = (
-            # "created_by",
-            "created_date",
-            "updated_date",
-            "is_popular",
-            "status",
-        )
         
 class EdirChangeRequestSerializer(serializers.ModelSerializer):
-    maker = SimpleUserSerializer(read_only=True)
+    maker = SimpleEdirUserSerializer(read_only=True)
     edir = EdirSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
@@ -226,7 +310,7 @@ class EdirChangeRequestSerializer(serializers.ModelSerializer):
 
 
 class BankChangeRequestSerializer(serializers.ModelSerializer):
-    maker = SimpleUserSerializer(read_only=True)
+    maker = SimpleEdirUserSerializer(read_only=True)
     bank = BankSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
@@ -294,6 +378,50 @@ class BankWithEdirSerializer(serializers.ModelSerializer):
             status="PENDING"
         ).exists()
 
+
+class EdirUserChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleEdirUserSerializer(read_only=True)
+    edir_user = EdirUserDetailSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = EdirUserChangeRequest
+        fields = [
+            "id",
+            "edir_user",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            'phone_number',
+            "created_at",
+        ]
+
+
+class FamilyChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleEdirUserSerializer(read_only=True)
+    family = FamilyWithUserSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = FamilyChangeRequest
+        fields = [
+            "id",
+            "family",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
 
 
 # class PaymentSerializer(serializers.ModelSerializer):
@@ -407,9 +535,14 @@ class EdirDetailSerializer(serializers.ModelSerializer):
         return EdirUser.objects.filter(edir=obj, status="Active").count()
     def get_unpaid_fees_total(self, obj):
         user = self.context.get("request").user
+        current_user = EdirUser.objects.filter(
+            user=user,
+            edir=obj,
+            status="Active"
+        ).only("id").first()
         total = (
             FeeAssignment.objects.filter(
-                user=user,
+                user=current_user,
                 fee__edir=obj,
                 fee__fee_type="Income",
             )
@@ -427,6 +560,20 @@ class EdirDetailSerializer(serializers.ModelSerializer):
 
         # members = [link.user for link in committee_links]
         return EdirUserWithNumFamSerializer(committees, many=True).data
+    
+
+class EdirDetailHeaderSerializer(serializers.ModelSerializer):
+    member_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edir
+        fields = [
+            "id", "name", "monthly_fee", "address", "description", "meeting_date", "meeting_place",
+            "created_date", "member_count", 
+        ]
+    def get_member_count(self, obj):
+        return EdirUser.objects.filter(edir=obj, status="Active").count()
+
 
 # class BillSummarySerializer(serializers.Serializer):
 #     # edir_id = serializers.IntegerField()
@@ -445,12 +592,12 @@ class FeeSerializer(serializers.ModelSerializer):
         model = Fee
         fields = "__all__"
 
-# class TransactionSerializer(serializers.Serializer):
-#     Trx_ref = serializers.CharField()
-#     paid_date = serializers.DateTimeField()
-#     method = serializers.CharField()
-#     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
-#     fees = serializers.SerializerMethodField()
+class TransactionSerializer(serializers.Serializer):
+    Trx_ref = serializers.CharField()
+    paid_date = serializers.DateTimeField()
+    method = serializers.CharField()
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    fees = serializers.SerializerMethodField()
 
 #     def get_fees(self, obj):
 #         fees = FeeAssignment.objects.filter(Trx_ref=obj["Trx_ref"]).select_related("fee")
@@ -569,7 +716,7 @@ class FeeTrxSerializer(serializers.ModelSerializer):
         fields = ["id", "user_full_name", "trx_payment_method", "trx_ref", "trx_type", "payment_status", "payment_date"]
         
 class FeeDetailSerializer(serializers.ModelSerializer):
-    supported_member = SimpleUserSerializer(read_only=True)
+    supported_member = SimpleEdirUserSerializer(read_only=True)
     has_edit_pending = serializers.SerializerMethodField()
     has_disable_pending = serializers.SerializerMethodField()
 
@@ -604,7 +751,7 @@ class FeeDetailSerializer(serializers.ModelSerializer):
     
 
 class ExpenseDetailSerializer(serializers.ModelSerializer):
-    supported_member = SimpleUserSerializer(read_only=True)
+    supported_member = SimpleEdirUserSerializer(read_only=True)
     has_edit_pending = serializers.SerializerMethodField()
     has_disable_pending = serializers.SerializerMethodField()
 
@@ -670,7 +817,7 @@ class ExpenseFeeSerializer(serializers.ModelSerializer):
 
 
 class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
-    maker = SimpleUserSerializer(read_only=True)
+    maker = SimpleEdirUserSerializer(read_only=True)
     fee = ExpenseDetailSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
@@ -698,30 +845,135 @@ class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
             user_id = new_value["supported_member"]
 
             try:
-                user = CustomUser.objects.get(id=user_id)
+                user = EdirUser.objects.get(id=user_id)
                 new_value["supported_member"] = {
                     "id": user.id,
                     "full_name": user.full_name
                 }
-            except CustomUser.DoesNotExist:
+            except EdirUser.DoesNotExist:
                 pass
         if old_value and old_value.get("supported_member"):
             user_id = old_value["supported_member"]
 
             try:
-                user = CustomUser.objects.get(id=user_id)
+                user = EdirUser.objects.get(id=user_id)
                 old_value["supported_member"] = {
                     "id": user.id,
                     "full_name": user.full_name
                 }
-            except CustomUser.DoesNotExist:
+            except EdirUser.DoesNotExist:
                 pass
 
         return data
 
 
+class PaymentChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleEdirUserSerializer(read_only=True)
+    # trx = TransactionDetailSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = TransactionChangeRequest
+        fields = [
+            "id",
+            "trx",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+            "image",
+        ]
+        
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        new_value = data.get("new_value")
+        old_value = data.get("old_value")
+        request = self.context.get('request')
+        if  instance.image:
+            data['image'] = request.build_absolute_uri(instance.image.url) if request else instance.image.url
+        else:
+            data['image'] = None
+
+        if new_value and new_value.get("bank"):
+            bank_id = new_value["bank"]
+            try:
+                bank = Bank.objects.get(id=bank_id)
+                new_value["bank"] = {
+                    "id": bank.id,
+                    "name": bank.bank_name
+                }
+            except Bank.DoesNotExist:
+                pass
+
+        if new_value and new_value.get("fees"):
+            fee_ids = new_value["fees"]
+            fees_list = []
+
+            for fee_id in fee_ids:
+                try:
+                    fee = Fee.objects.get(id=fee_id)
+
+                    supported_member = None
+                    if fee.supported_member:
+                        user = EdirUser.objects.get(id=fee.supported_member.id)
+                        supported_member = {
+                            "id": user.id,
+                            "full_name": user.full_name
+                        }
+
+                    fees_list.append({
+                        "id": fee.id,
+                        "fee_name": fee.name,
+                        "amount": fee.amount,
+                        "category": fee.category,
+                        "supported_member": supported_member
+                    })
+
+                except (EdirUser.DoesNotExist, Fee.DoesNotExist):
+                    pass
+
+            new_value["fees"] = fees_list  
+            
+        if old_value and old_value.get("fees"):
+            fee_ids = old_value["fees"]   # ❗ FIX (you used new_value before)
+            fees_list = []
+
+            for fee_id in fee_ids:
+                try:
+                    fee = Fee.objects.get(id=fee_id)
+
+                    supported_member = None
+                    if fee.supported_member:
+                        user = EdirUser.objects.get(id=fee.supported_member.id)
+                        supported_member = {
+                            "id": user.id,
+                            "full_name": user.full_name
+                        }
+
+                    fees_list.append({
+                        "id": fee.id,
+                        "fee_name": fee.name,
+                        "amount": fee.amount,
+                        "category": fee.category,
+                        "supported_member": supported_member
+                    })
+
+                except (EdirUser.DoesNotExist, Fee.DoesNotExist):
+                    pass
+
+            old_value["fees"] = fees_list  # ✅ correct target
+
+        return data
+
+
 class FeeChangeRequestSerializer(serializers.ModelSerializer):
-    maker = SimpleUserSerializer(read_only=True)
+    maker = SimpleEdirUserSerializer(read_only=True)
     fee = FeeDetailSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
@@ -749,29 +1001,29 @@ class FeeChangeRequestSerializer(serializers.ModelSerializer):
             user_id = new_value["supported_member"]
 
             try:
-                user = CustomUser.objects.get(id=user_id)
+                user = EdirUser.objects.get(id=user_id)
                 new_value["supported_member"] = {
                     "id": user.id,
                     "full_name": user.full_name
                 }
-            except CustomUser.DoesNotExist:
+            except EdirUser.DoesNotExist:
                 pass
         if old_value and old_value.get("supported_member"):
             user_id = old_value["supported_member"]
 
             try:
-                user = CustomUser.objects.get(id=user_id)
+                user = EdirUser.objects.get(id=user_id)
                 old_value["supported_member"] = {
                     "id": user.id,
                     "full_name": user.full_name
                 }
-            except CustomUser.DoesNotExist:
+            except EdirUser.DoesNotExist:
                 pass
 
         if new_value and new_value.get("users"):
             user_ids = new_value["users"]
 
-            users = CustomUser.objects.filter(id__in=user_ids)
+            users = EdirUser.objects.filter(id__in=user_ids)
             new_value["users"] = [
                 {
                     "id": user.id,
@@ -783,7 +1035,7 @@ class FeeChangeRequestSerializer(serializers.ModelSerializer):
         if old_value and old_value.get("users"):
             user_ids = old_value["users"]
 
-            users = CustomUser.objects.filter(id__in=user_ids)
+            users = EdirUser.objects.filter(id__in=user_ids)
             old_value["users"] = [
                 {
                     "id": user.id,

@@ -10,16 +10,21 @@ urlpatterns = [
     path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'),
     
-    path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'), #removed
+    # path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'), #removed
     path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'),
     path('user/register/', views.self_register, name='user-register'),
-    path("user/<int:user_id>/<int:edir_id>/deactivate/", views.deactivate_member, name="deactivate-member"),
-    
+    # path("user/<int:user_id>/<int:edir_id>/deactivate/", views.deactivate_member, name="deactivate-member"),
+    path("member/disable/<int:member_id>/", views.deactivate_member, name="deactivate-member"),
+    path("member/update/<int:member_id>/", views.update_member, name="update-member"),
+    path('approve_member/<int:id>/', views.approve_member, name='approve-member'),
+    path('reject_member/<int:id>/', views.reject_member, name='reject-member'),
     # path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail'),
     # path('user/<int:user_id>/', views.user_detail_with_family, name='user-detail_with_family'),
     
     path('user/<int:user_id>/', views.user_detail, name='user-detail'),
     path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'),
+    path('member/<int:user_id>/', views.member_detail, name='member-detail'),
+    path('member/<int:user_id>/<int:edir_id>/', views.member_detail, name='member-detail-with-edir'),
     path('set-password/<uidb64>/<token>/', views.set_password, name='set-password'),
     
     path('check_user_phone/<int:phone_number>/', views.check_user_phone, name='check_user_phone'),
@@ -29,11 +34,13 @@ urlpatterns = [
     path('auth/change-password/', views.change_password, name='change-password'),
     
     #Family related endpoints
-    path('admin-add-family/<int:user_id>/', views.add_family, name='admin-add-family'),   
+    path('admin_add_family/<int:user_id>/', views.add_family, name='admin-add-family'),   
     path('family_list/<int:user_id>/', views.user_family_list, name='family-list'), 
     path('family/<int:user_id>/', views.family_detail, name='family-detail'), 
-    path("family/<int:family_id>/deactivate/", views.deactivate_family, name="deactivate-family"),
+    path("family/deactivate/<int:family_id>/", views.deactivate_family, name="deactivate-family"),
     path('family/<int:family_id>/delete/', views.delete_family_member, name='delete-family'),
+    path('approve_family/<int:id>/', views.approve_family, name='approve-family'),
+    path('reject_family/<int:id>/', views.reject_family, name='reject-family'),
 
     #Bank account related endpoints
     path('add-bank/<int:edir_id>/', views.add_bank, name='add-bank'),   
@@ -81,27 +88,29 @@ urlpatterns = [
     path("edir/incomes/<int:edir_id>/", views.get_daily_edir_incomes, name="get-daily-edir-incomes"),
 
     #Fee related endpoints
-    path("fee/create/<int:edir_id>/", views.create_fee, name="create-fees"),
-    path("fee/detail/<int:fee_id>/", views.get_fee_detail, name="get-fee-detail"),
-    path("fee/update/<int:fee_id>/", views.update_fee, name="update-fees"),
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
+    path("fee/detail/<int:fee_id>/", views.get_fee_detail, name="get-fee-detail"),
+    path("fee/create/<int:edir_id>/", views.create_fee, name="create-fees"),
+    path("fee/update/<int:fee_id>/", views.update_fee, name="update-fees"),
+    path("fee_disable/<int:fee_id>/", views.disable_fee, name="disable-fee"),
     path('approve_fee/<int:id>/', views.approve_fee, name='approve-fee'),
     path('reject_fee/<int:id>/', views.reject_fee, name='reject-fee'),
     path("fee_request/detail/<int:id>/", views.get_fee_request_detail, name="get-fee-request-detail"),
-    path("fee_disable/<int:fee_id>/", views.disable_fee, name="disable-fee"),
 
-    path("fees/unpaid/<int:edir_id>/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"),
+    path("fees/unpaid/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"),
     path("fees/paid/<str:trx_ref>/", views.get_paid_fees, name="get_paid_fees"),
-    path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),
-    path("admin_pay/fees/", views.admin_pay_fees, name="admin-pay-fees"),
-    path("unpay/fees/", views.unpay_fees, name="unpay-fees"),
     path("fee_detail/<int:id>/", views.get_fee_details, name="fee-details"),
     path("fee/<int:fee_id>/deactivate/", views.deactivate_fee, name="deactivate-fee"),
 
     #Payment related endpoints
+    path("user/payments/<int:user_id>/", views.get_user_payments, name="get_user_payments"),
     path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"),
+    path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"),
+    path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),
+    path("payment/approve/<int:id>/", views.approve_payments, name="approve-payments"),
+    path("unpay/fees/", views.unpay_fees, name="unpay-fees"),
     path("remove/payment/<str:trx_ref>/", views.remove_payment, name="remove_payment"),
-    path("user/payments/<int:user_id>/<int:edir_id>/", views.get_user_payments, name="get_user_payments"),
+
     # path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
     # path("edir/<int:edir_id>/unpaid-months/", views.unpaid_months, name="unpaid_months"),
     # path('bill/<int:bill_id>/delete/', views.delete_bill, name='delete-bill'),
