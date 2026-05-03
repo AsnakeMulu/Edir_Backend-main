@@ -535,6 +535,7 @@ class Bank(models.Model):
     bank_name = models.CharField(max_length=50 ) #choices=BANKS
     account_name = models.CharField(max_length=255)
     account_number = models.CharField(max_length=20)
+    amount = models.FloatField(default=0.0)
     # maker = models.ForeignKey(
     #     CustomUser, related_name="bank_maker", on_delete=models.CASCADE
     # )
@@ -768,6 +769,67 @@ class FeeAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.fee.category} - {self.action}"
+    
+
+class Deposit(models.Model):
+    TRANSACTION_TYPE = (
+        ("WITHDRAW", "Withdraw"),
+        ("PAYMENT", "Payment"),
+    )
+    TRANSACTION_METHOD = (
+        ("CASH", "Cash"),
+        ("TRANSFER", "Transfer"),
+    )
+    STATUS = (
+        ("REVERSED", "Reversed"),
+        ("Cancelled", "Cancelled"),
+        ("Modified", "Modified"),
+        ("Paid", "Paid")
+    )
+
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE)
+    # amount = models.IntegerField()#max_digits=12, decimal_places=2
+    payment_method = models.CharField(max_length=50, blank=True, null=True, choices=TRANSACTION_METHOD)
+    bank = models.ForeignKey(Bank, on_delete=models.CASCADE, related_name="bank", blank=True, null=True)
+    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, related_name="deposit_user", null=True, blank=True)
+    image = models.ImageField(upload_to='images/', null=True, blank=True) 
+    
+    # payment_status = models.CharField(max_length=10, choices=STATUS, default="Paid")
+    # reason = models.TextField(blank=True, null=True)  # for rejection
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+
+
+
+class DepositChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    deposit = models.ForeignKey(Deposit, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(EdirUser, related_name="deposit_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(EdirUser, related_name="deposit_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
 
 def generate_reference():
     return uuid.uuid4().hex[:16].upper()
@@ -777,12 +839,18 @@ class Transaction(models.Model):
         ("WITHDRAW", "Withdraw"),
         ("PAYMENT", "Payment"),
     )
+    TRANSACTION_METHOD = (
+        ("CASH", "Cash"),
+        ("TRANSFER", "Transfer"),
+    )
     STATUS = (
         ("PENDING", "Pending"),
-        ("APPROVED", "Approved"),
-        ("REJECTED", "Rejected"),
-        ("COMPLETED", "Completed"),
+        # ("APPROVED", "Approved"),
+        # ("REJECTED", "Rejected"),
+        # ("COMPLETED", "Completed"),
         ("REVERSED", "Reversed"),
+        ("Cancelled", "Cancelled"),
+        ("Modified", "Modified"),
         ("Paid", "Paid")
     )
 
@@ -796,19 +864,12 @@ class Transaction(models.Model):
     )
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE)
     amount = models.IntegerField()#max_digits=12, decimal_places=2
-    payment_method = models.CharField(max_length=50, blank=True, null=True) 
-    bank = models.ForeignKey(Bank, on_delete=models.CASCADE, related_name="bank", blank=True, null=True)
-    image = models.ImageField(upload_to='images/', null=True, blank=True) 
-    # maker = models.ForeignKey(
-    #     CustomUser, related_name="trx_made_by", on_delete=models.CASCADE
-    # )
-    # checker = models.ForeignKey(
-    #     CustomUser, related_name="trx_checked_by",
-    #     on_delete=models.SET_NULL, null=True, blank=True
-    # )
-
+    payment_method = models.CharField(max_length=50, blank=True, null=True, choices=TRANSACTION_METHOD)
+    deposit = models.ForeignKey(Deposit, on_delete=models.CASCADE, related_name="transactions", blank=True, null=True)
+    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, related_name="trx_user", null=True, blank=True)
+   
     payment_status = models.CharField(max_length=10, choices=STATUS, default="PENDING")
-    reason = models.TextField(blank=True, null=True)  # for rejection
+    # reason = models.TextField(blank=True, null=True)  # for rejection
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(null=True, blank=True)
 
@@ -827,7 +888,9 @@ class TransactionChangeRequest(models.Model):
         # ("CREATED", "Created"),
     )
     edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
-    trx = models.ForeignKey(Transaction, on_delete=models.SET_NULL, null=True, blank=True)
+    user = models.ForeignKey(EdirUser, related_name="trxrequest_user", on_delete=models.CASCADE, null=True, blank=True)
+    trx = models.ForeignKey(Transaction, related_name="trx", on_delete=models.SET_NULL, null=True, blank=True)
+    prev_trx = models.ForeignKey(Transaction, related_name="trx_prev", on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=10, choices=ACTION_CHOICES)
 
     old_value = models.JSONField(null=True, blank=True)

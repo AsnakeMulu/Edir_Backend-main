@@ -47,6 +47,7 @@ urlpatterns = [
     path('bank_list/<int:edir_id>/', views.edir_bank_list, name='bank-list'), 
     path('active_bank_list/<int:edir_id>/', views.edir_active_bank_list, name='active-bank-list'), 
     path('bank/<int:bank_id>/', views.bank_detail, name='bank-detail'), 
+    path('bank_details/<int:bank_id>/', views.get_bank_details, name='bank-details'),
     path('update_bank/<int:bank_id>/', views.update_bank, name='update-bank'), 
     path("bank/<int:bank_id>/deactivate/", views.deactivate_bank, name="deactivate-bank"),
     path('bank/<int:bank_id>/delete/', views.delete_bank, name='delete-bank'),
@@ -85,7 +86,7 @@ urlpatterns = [
 
     path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
     # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
-    path("edir/incomes/<int:edir_id>/", views.get_daily_edir_incomes, name="get-daily-edir-incomes"),
+    path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
 
     #Fee related endpoints
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
@@ -98,7 +99,7 @@ urlpatterns = [
     path("fee_request/detail/<int:id>/", views.get_fee_request_detail, name="get-fee-request-detail"),
 
     path("fees/unpaid/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"),
-    path("fees/paid/<str:trx_ref>/", views.get_paid_fees, name="get_paid_fees"),
+    path("fees/paid/<str:ref>/", views.get_paid_fees, name="get_paid_fees"),
     path("fee_detail/<int:id>/", views.get_fee_details, name="fee-details"),
     path("fee/<int:fee_id>/deactivate/", views.deactivate_fee, name="deactivate-fee"),
 
@@ -107,19 +108,19 @@ urlpatterns = [
     path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"),
     path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"),
     path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),
+    path("update_pay/fees/<int:edir_id>/", views.update_pay_fees, name="update-pay-fees"),
+    path("disable_payment/<str:ref>/", views.disable_payment, name="disable-payment"),
     path("payment/approve/<int:id>/", views.approve_payments, name="approve-payments"),
+    path("payment/reject/<int:id>/", views.reject_payment, name="reject-payments"),
     path("unpay/fees/", views.unpay_fees, name="unpay-fees"),
     path("remove/payment/<str:trx_ref>/", views.remove_payment, name="remove_payment"),
 
+    path("trx/undeposited/<int:edir_id>/", views.get_undeposited_trxs, name="get-undeposited-trxs"),
+    path("deposit/cashes/<int:edir_id>/", views.deposit_payments, name="deposit-cashs"),
     # path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
-    # path("edir/<int:edir_id>/unpaid-months/", views.unpaid_months, name="unpaid_months"),
-    # path('bill/<int:bill_id>/delete/', views.delete_bill, name='delete-bill'),
-    # path('payment/<int:payment_id>/delete/', views.delete_payment, name='delete-payment'),
-    # path("bill/pay/", views.pay_bill, name="pay-bill"),
     # path("user/<int:edir_id>/payments/", views.user_payments, name="user_payments"),
     # path("payment/add/", views.add_payment, name="add_payment"),
     # path("payment/my/", views.my_payments, name="my_payments"),
-    # path("payment/all/", views.all_payments, name="all_payments"),
     # path("edir/payments/", views.edir_payments, name="edir-payments"),
     
     #Event related endpoints
