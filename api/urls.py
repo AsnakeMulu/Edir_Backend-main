@@ -47,7 +47,7 @@ urlpatterns = [
     path('bank_list/<int:edir_id>/', views.edir_bank_list, name='bank-list'), 
     path('active_bank_list/<int:edir_id>/', views.edir_active_bank_list, name='active-bank-list'), 
     path('bank/<int:bank_id>/', views.bank_detail, name='bank-detail'), 
-    path('bank_details/<int:bank_id>/', views.get_bank_details, name='bank-details'),
+    path('bank/details/<int:bank_id>/', views.get_bank_details, name='bank-details'),
     path('update_bank/<int:bank_id>/', views.update_bank, name='update-bank'), 
     path("bank/<int:bank_id>/deactivate/", views.deactivate_bank, name="deactivate-bank"),
     path('bank/<int:bank_id>/delete/', views.delete_bank, name='delete-bank'),
@@ -87,6 +87,8 @@ urlpatterns = [
     path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
     # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
     path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
+    path("add_income/<int:edir_id>/", views.add_income, name="add-income"),
+    path('approve_income/<int:id>/', views.approve_income, name='approve-income'),
 
     #Fee related endpoints
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),

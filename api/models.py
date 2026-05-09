@@ -535,14 +535,8 @@ class Bank(models.Model):
     bank_name = models.CharField(max_length=50 ) #choices=BANKS
     account_name = models.CharField(max_length=255)
     account_number = models.CharField(max_length=20)
-    amount = models.FloatField(default=0.0)
-    # maker = models.ForeignKey(
-    #     CustomUser, related_name="bank_maker", on_delete=models.CASCADE
-    # )
-    # checker = models.ForeignKey(
-    #     CustomUser, related_name="bank_checker",
-    #     on_delete=models.SET_NULL, null=True, blank=True
-    # )
+    amount = models.IntegerField(default=0)
+    
     status = models.CharField(max_length=15, choices=STATUS, default="Active")
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(null=True, blank=True)
@@ -704,6 +698,36 @@ class ExpenseChangeRequest(models.Model):
 
     maker = models.ForeignKey(EdirUser, related_name="expense_maker", on_delete=models.CASCADE, null=True)
     checker = models.ForeignKey(EdirUser, related_name="expense_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+
+class IncomeChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("CREATE", "Create"),
+        ("UPDATE", "Update"),
+        ("DISABLE", "Disable"),
+    )
+
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        # ("CREATED", "Created"),
+    )
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    fee = models.ForeignKey(Fee, on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(EdirUser, related_name="income_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(EdirUser, related_name="income_checker", on_delete=models.SET_NULL, null=True, blank=True)
 
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
     comment = models.TextField(blank=True, null=True)

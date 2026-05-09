@@ -283,7 +283,7 @@ class BankSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bank
         fields = [
-            'id', 'bank_name', 'account_number', 'account_name','status',
+            'id', 'bank_name', 'account_number', 'account_name','status', 'amount', 
         ]
 
         
@@ -358,6 +358,7 @@ class BankWithEdirSerializer(serializers.ModelSerializer):
             'bank_name', 
             'account_number', 
             'account_name',
+            'amount',
             'status', 
             'edir', 
             'has_edit_pending',
@@ -632,6 +633,7 @@ class DepositSerializer(serializers.ModelSerializer):
             "bank",
             "created_at",
             "transactions",
+            "payment_method",
             "user",
             "total_amount",
         ]
@@ -1218,8 +1220,8 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
 
 class TransactionSerializer(serializers.ModelSerializer):
     ref = serializers.CharField(source="reference")
-    bank_name = serializers.CharField(source="bank.bank_name", default=None)
-    image = serializers.SerializerMethodField()
+    # bank_name = serializers.CharField(source="bank.bank_name", default=None)
+    # image = serializers.SerializerMethodField()
     fees = FeeAssignmentSerializer(source="feeassignment_trx", many=True)
     
     has_edit_pending = serializers.SerializerMethodField()
@@ -1233,8 +1235,8 @@ class TransactionSerializer(serializers.ModelSerializer):
             "ref",
             "created_at",
             "payment_method",
-            "bank_name",
-            "image",
+            # "bank_name",
+            # "image",
             "total_amount",
             "payment_status",
             "fees",
