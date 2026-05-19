@@ -646,6 +646,7 @@ class Fee(models.Model):
     Fee_Type = [
         ('Expense', 'Expense'),
         ('Income', 'Income'),
+        ('Fee', 'Fee'),
     ]
 
     edir = models.ForeignKey("Edir", on_delete=models.CASCADE, related_name="fee_edir")
@@ -666,7 +667,7 @@ class Fee(models.Model):
     #     on_delete=models.SET_NULL, null=True, blank=True
     # )
 
-    fee_type = models.CharField(max_length=20, choices=Fee_Type, default="Income")
+    fee_type = models.CharField(max_length=20, choices=Fee_Type, default="Fee")
     status = models.CharField(max_length=30, choices=STATUS, default="Active")
     payment_date = models.DateField(null=True, blank=True)
     created_date = models.DateTimeField(auto_now_add=True)
@@ -968,9 +969,9 @@ class FeeAssignment(models.Model):
     )
     fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name="feeassignment_fee")
     user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, blank=True, null=True)
-    # transaction_change_request = models.ManyToManyField(
-    #     TransactionChangeRequest, on_delete=models.SET_NULL, null=True, blank=True
-    # )
+    transaction_change_request = models.ForeignKey(
+        TransactionChangeRequest, on_delete=models.SET_NULL, null=True, blank=True
+    )
     transaction = models.ForeignKey(Transaction, on_delete=models.SET_NULL, related_name='feeassignment_trx', null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="Active")
     created_date = models.DateTimeField(auto_now_add=True)

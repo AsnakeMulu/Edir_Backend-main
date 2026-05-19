@@ -10,7 +10,7 @@ from django.contrib.auth.hashers import make_password
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from .serializers import BankSerializer, DepositSerializer, EdirDetailHeaderSerializer, EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, PaymentChangeRequestSerializer, TransactionSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer
+from .serializers import BankSerializer, DepositSerializer, EdirDetailHeaderSerializer, EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, TransactionSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer
 from .serializers import UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer, ExpenseFeeSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, UserWithRoleSerializer, EdirUserWithNumFamSerializer, FamilyChangeRequestSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Deposit, DepositChangeRequest, EdirAuditLog, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, UserAuditLog, EdirUserAuditLog, BankAuditLog, FeeAuditLog, FeeAssignAuditLog, CustomUser, TrxAuditLog, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest
@@ -27,6 +27,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.forms.models import model_to_dict
 import logging
 from core.audit import model_to_json
+from django.core.serializers.json import DjangoJSONEncoder
 
 import calendar
 import datetime
@@ -998,9 +999,11 @@ def approve_expense (request, id):
             )
         
         category=new.get("category")
-        amount=new.get("amount")
-        supported_member_id=new.get("supported_member")
-        # trx_ref = str(uuid.uuid4())[:16]
+        amount=int(new.get("amount")) if new.get("amount") else 0
+        supported_member_id=new.get("supported_member") if new.get("supported_member") else None
+        bank_id = new.get("bank") if new.get("bank") else None
+        payment_method = new.get("method")
+        bank = Bank.objects.get(id=bank_id) if bank_id else None
 
         supported_member = None
         if supported_member_id and (category == "Funeral Contribution" or category == "Sickness Support"):
@@ -1009,6 +1012,13 @@ def approve_expense (request, id):
             supported_member = None
         
         if change.action == "CREATE":
+            if bank and int(bank.amount) < amount:
+                return Response(
+                    {
+                        "error": f"Insufficient balance. Available: {bank.amount}, Required: {amount}"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             expense = Fee.objects.create(
                 edir=edir,
                 category=category,
@@ -1024,23 +1034,19 @@ def approve_expense (request, id):
             logger.info(
                 f"User approved expense creation request successfully | approved_by={request.user.id, request.user.phone_number} | expense={new}"
             )
-            
-            # FeeAuditLog.objects.create(
-            #     fee=expense,
-            #     action="Approved Expense",
-            #     performed_by=request.user,
-            #     previous_status = "Pending",
-            #     new_status="Active",
-            #     new_value=change.new_value,
-            #     )
-                
+            deposit = Deposit.objects.create(
+                transaction_type="WITHDRAW",
+                payment_method= "TRANSFER",
+                bank_id=bank_id,
+                # image=image,
+                user=checker,
+            )
             trx = Transaction.objects.create(
                 transaction_type="WITHDRAW",
                 amount=amount,
-                payment_method="Cash",
-                # bank=bank,
-                # image=image,
-                user= supported_member.user if supported_member else None,
+                payment_method= payment_method,
+                deposit=deposit,
+                user= supported_member if supported_member else None,
                 edir=edir,
                 payment_status="Paid"
             )
@@ -1052,7 +1058,7 @@ def approve_expense (request, id):
                 trx =trx,
                 action="CREATE",
                 new_value=new,
-                maker=request.user,
+                maker=change.maker,
                 status="APPROVED",
                 )
             trxRequest.save()
@@ -1060,28 +1066,32 @@ def approve_expense (request, id):
                 f"Expense Transaction Completed | trx={trx.reference} | trx_type=Withdraw | by={request.user}"
             )
             
-            # TrxAuditLog.objects.create(
-            #     transaction=trx,
-            #     action="CREATE",
-            #     performed_by=request.user,
-            #     new_status="APPROVED",
-            #     new_value=model_to_json(trx),
-            #     )
-            
             FeeAssignment.objects.create(
                 fee=expense, 
                 user=supported_member, 
                 # maker = request.user, 
                 transaction=trx)
             
+            if bank_id:
+                bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount - amount
+                bank.updated_at = timezone.now()
+                bank.save()
+            
             logger.info(
                 f"Transaction was assigned to expense successfully |trx={trx} fee={new} created by = {request.user.id}, {request.user.phone_number}"
             )
         elif change.action == "UPDATE":
+            fee_assign = FeeAssignment.objects.select_related('transaction__deposit__bank').filter(fee=change.fee).first()
+            amount_difference = amount - int(fee_assign.transaction.amount if fee_assign and fee_assign.transaction else 0)
 
-            # FeeAssignment.objects.filter(fee=change.fee).delete()
-            # data = request.data
-            # edir = Edir.objects.get(id=fee.edir)
+            if bank and int(bank.amount) < int(amount_difference):
+                return Response(
+                    {
+                        "error": f"Insufficient balance. Available: {bank.amount}, Required: {amount_difference}"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             expense=change.fee
 
             expense.category = category
@@ -1091,32 +1101,84 @@ def approve_expense (request, id):
             expense.payment_date = new.get("payment_date")
             expense.reason = new.get("reason")
             expense.save()
-
             
-            # fee_assign = FeeAssignment.objects.filter(fee=change.fee).first()  
-            # trx = fee_assign.transaction
-            # trx.amount=amount
-            # trx.save()
-
-            fee_assign = FeeAssignment.objects.select_related('transaction').filter(fee=change.fee).first()
+            deposit = Deposit.objects.create(
+                transaction_type="WITHDRAW",
+                payment_method= "TRANSFER",
+                bank_id=bank_id,
+                # image=image,
+                user=checker,
+            )
+            trx = Transaction.objects.create(
+                transaction_type="WITHDRAW",
+                amount=amount,
+                payment_method=payment_method,
+                deposit=deposit,
+                user= supported_member if supported_member else None,
+                edir=edir,
+                payment_status="Paid"
+            )
+            trx.save()
+            trx_data = model_to_dict(trx, exclude=["updated_at", "created_at, "])
+            
+            trxRequest = TransactionChangeRequest.objects.create(
+                edir=edir,
+                user = supported_member if supported_member else None,
+                trx =trx,
+                action="UPDATE",
+                new_value=json.loads(json.dumps(trx_data, cls=DjangoJSONEncoder)),
+                maker=change.maker,
+                status="APPROVED",
+                )
+            trxRequest.save()
 
             if fee_assign and fee_assign.transaction:
-                fee_assign.transaction.amount = amount
-                fee_assign.transaction.save()
-            else:
-                logger.error("Transaction missing for FeeAssignment")
-            
-            fee_assign.user=supported_member
-            fee_assign.save()
+                prev_trx = fee_assign.transaction
+                prev_trx.payment_status = "REVERSED"
+                prev_trx.updated_at = timezone.now()
+                prev_trx.save()
+
+            if fee_assign:
+                fee_assign.transaction = trx
+                fee_assign.user=supported_member if supported_member else None
+                fee_assign.updated_date = timezone.now()
+                fee_assign.save()
+
+            if fee_assign and fee_assign.transaction and fee_assign.transaction.deposit and fee_assign.transaction.deposit.bank:
+                # bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount + int(fee_assign.transaction.amount)  
+                bank.updated_at = timezone.now()
+                bank.save()
+
+            if bank_id:
+                bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount - amount 
+                bank.updated_at = timezone.now()
+                bank.save()
             
         elif change.action == "DISABLE":
+            fee_assign = FeeAssignment.objects.select_related('transaction__deposit__bank').filter(fee=change.fee).first()
+            bank = fee_assign.transaction.deposit.bank if fee_assign.transaction and fee_assign.transaction.deposit  else None
+            prev_trx = None
+            if fee_assign and fee_assign.transaction:
+                prev_trx = fee_assign.transaction
+                prev_trx.payment_status = "DISABLED"
+                prev_trx.updated_at = timezone.now()
+                prev_trx.save()
+
+            if bank:
+                # bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount + int(prev_trx.amount) if prev_trx else bank.amount
+                bank.updated_at = timezone.now()
+                bank.save()
+                
             expense=change.fee
 
             expense.status = "Not Active"
             expense.updated_date = timezone.now()
             expense.save()
             logger.info(
-            f"User approved expense deactivation request successfully | approved_by={request.user.id, request.user.full_name} | expense={change.old_value}"
+            f"User approved expense deactivation request successfully | approved_by={request.user.id, request.user} | expense={change.old_value}"
             )
             change.comment = new.get("reason")
 
@@ -1187,8 +1249,8 @@ def approve_income (request, id):
             )
         
         category=new.get("category")
-        amount=int(new.get("amount"))
-        bank_id = new.get("bank") if new.get("bank") else 1
+        amount=int(new.get("amount")) if new.get("amount") else 0
+        bank_id = new.get("bank") if new.get("bank") else None
         supported_member_id=new.get("supported_member")
         payment_method = new.get("method")
 
@@ -1216,7 +1278,7 @@ def approve_income (request, id):
             )
             deposit = Deposit.objects.create(
                 transaction_type="PAYMENT",
-                payment_method= payment_method,
+                payment_method= "TRANSFER",
                 bank_id=bank_id,
                 # image=image,
                 user=checker,
@@ -1263,10 +1325,6 @@ def approve_income (request, id):
                 f"Transaction was assigned to income successfully |trx={trx} fee={new} created by = {request.user.id}, {request.user.phone_number}"
             )
         elif change.action == "UPDATE":
-
-            # FeeAssignment.objects.filter(fee=change.fee).delete()
-            # data = request.data
-            # edir = Edir.objects.get(id=fee.edir)
             income=change.fee
 
             income.category = category
@@ -1277,57 +1335,95 @@ def approve_income (request, id):
             income.reason = new.get("reason")
             income.save()
 
-            fee_assign = FeeAssignment.objects.filter(fee=change.fee).first()  
-            prev_trx = fee_assign.transaction
-            prev_trx.payment_status="REVERSED"
-            prev_trx.save()
+            deposit = Deposit.objects.create(
+                transaction_type="PAYMENT",
+                payment_method= "TRANSFER",
+                bank_id=bank_id,
+                # image=image,
+                user=checker,
+            )
 
             trx = Transaction.objects.create(
                 transaction_type="PAYMENT",
                 amount=amount,
                 payment_method=payment_method,
                 edir=edir,
-                user=change.user,
+                user=supported_member if supported_member else None,
                 payment_status="PAID",
-                deposit = prev_trx.deposit if prev_trx.deposit else None
+                deposit = deposit 
             )
+            
+            trx_data = model_to_dict(trx, exclude=["updated_at", "created_at, "])
 
-            # fee_assign = FeeAssignment.objects.select_related('transaction').filter(fee=change.fee).first()
+            trxRequest = TransactionChangeRequest.objects.create(
+                edir=edir,
+                user = supported_member if supported_member else None,
+                trx =trx,
+                action="UPDATE",
+                new_value= json.loads(json.dumps(trx_data, cls=DjangoJSONEncoder)),
+                maker=change.maker,
+                status="APPROVED",
+                )
+            trxRequest.save()
+            
+            fee_assign = FeeAssignment.objects.select_related('transaction__deposit__bank').filter(fee=change.fee).first() 
+            prev_trx = None
+            if fee_assign: 
+                prev_trx = fee_assign.transaction
+                prev_trx.payment_status="REVERSED"
+                prev_trx.updated_at = timezone.now()
+                prev_trx.save()
+
             if fee_assign:
                 fee_assign.transaction = trx
-                fee_assign.user=supported_member
+                fee_assign.user=supported_member if supported_member else None
                 fee_assign.updated_at = timezone.now()
                 fee_assign.save()
             
+            if fee_assign and fee_assign.transaction and fee_assign.transaction.deposit and fee_assign.transaction.deposit.bank:
+                # bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount - int(fee_assign.transaction.amount)  
+                bank.updated_at = timezone.now()
+                bank.save()
+
             if bank_id:
                 bank = Bank.objects.get(id=bank_id)
-                bank.amount = bank.amount - prev_trx.amount + amount if prev_trx else bank.amount + amount
+                bank.amount = bank.amount  + amount 
                 bank.updated_at = timezone.now()
                 bank.save()
             
-        elif change.action == "DISABLE":    
-            bank_id = change.old_value.get("bank") if new.get("bank") else None
+        elif change.action == "DISABLE": 
+            fee_assign = FeeAssignment.objects.select_related('transaction__deposit__bank').filter(fee=change.fee).first()
+            bank = fee_assign.transaction.deposit.bank if fee_assign.transaction and fee_assign.transaction.deposit  else None
+               
+            # bank_id = change.old_value.get("bank") if new.get("bank") else None
+            if bank and int(bank.amount) < fee_assign.transaction.amount if fee_assign and fee_assign.transaction else 0:
+                return Response(
+                    {
+                        "error": f"Insufficient balance. Available: {bank.amount}, Required: {fee_assign.transaction.amount}"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             income=change.fee
 
             income.status = "Not Active"
             income.updated_date = timezone.now()
             income.save()
 
-            fee_assign = FeeAssignment.objects.filter(fee=change.fee).first()
             if fee_assign:
                 prev_trx = fee_assign.transaction
                 prev_trx.payment_status="DISABLED"
                 prev_trx.updated_at = timezone.now()
                 prev_trx.save()
             
-            if bank_id:
-                bank = Bank.objects.get(id=bank_id)
-                bank.amount = bank.amount - prev_trx.amount  if prev_trx else bank.amount 
+            if bank:
+                # bank = Bank.objects.get(id=bank_id)
+                bank.amount = bank.amount - int(prev_trx.amount)  if prev_trx else bank.amount 
                 bank.updated_at = timezone.now()
                 bank.save()
 
             logger.info(
-            f"User approved income deactivation request successfully | approved_by={request.user.id, request.user.full_name} | income={change.old_value}"
+            f"User approved income deactivation request successfully | approved_by={request.user.id, request.user} | income={change.old_value}"
             )
             change.comment = new.get("reason")
 
@@ -1402,6 +1498,56 @@ def reject_expense (request, id):
     except Exception as e:
         logger.exception(
             f"Expense rejection failed | expense_id={change.new_value if 'change' in locals() else 'Unknown'} | rejected by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def reject_income (request, id):
+    logger = logging.getLogger("income")
+    try:
+        
+        change = IncomeChangeRequest.objects.get(id=id)
+        reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            logger.exception(
+                f"Income change request rejection failed because it's already processed | income={change.new_value} | rejected by={request.user} | error=Already processed"
+            )
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        change.status = "Rejected"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        change.comment= reason
+        change.save()
+        logger.info(
+            f"User rejected income change request successfully | rejected_by={request.user.id, request.user.phone_number} | income={change.new_value}"
+        )       
+
+        return JsonResponse({
+            "message": "Income request rejected successfully",
+            "income": change.new_value,
+            "status": "Rejected",
+            "updated_date": change.approved_at,
+        }, status=200)
+    except Fee.DoesNotExist:
+        return JsonResponse({"error": "Income is not found "}, status=404)
+    except Exception as e:
+        logger.exception(
+            f"Income rejection failed | income_id={change.new_value if 'change' in locals() else 'Unknown'} | rejected by={request.user} | error={str(e)}"
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2577,7 +2723,7 @@ def edir_bank_list(request, edir_id):
     logger = logging.getLogger("bank_account")
     try:
         edir = Edir.objects.get(id=edir_id)
-        bank = Bank.objects.filter(edir=edir, status__in=["Active", "Pending"])
+        bank = Bank.objects.filter(edir=edir)
         
         serializer = BankWithEdirSerializer(bank, many=True)
         # print(serializer.data)
@@ -2864,11 +3010,39 @@ def disable_expense(request, fee_id):
                 {"error": "Only PUT or PATCH method allowed"},
                 status=405
             )
+
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+        # fee_data = model_to_dict(fee, exclude=["updated_date", "created_date"])
+        # fee_data = json.loads(
+        #     json.dumps(fee_data, cls=DjangoJSONEncoder)
+        # )
+        # trx_data = {
+        #     **fee_data,
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
+        serializer = ExpenseDetailSerializer(fee)
+
         ExpenseChangeRequest.objects.create(
             fee=fee,
             edir=fee.edir,
             action="DISABLE",
-            old_value= model_to_json(fee, exclude=["updated_date"]), 
+            old_value= serializer.data, #model_to_json(fee, exclude=["updated_date"]), 
             new_value= request.data,
             maker=maker,
             status="PENDING",
@@ -2902,6 +3076,92 @@ def disable_expense(request, fee_id):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def disable_income(request, fee_id):
+    logger = logging.getLogger("income")
+    try:
+        fee = Fee.objects.get(id=fee_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=fee.edir,
+            status="Active"
+        ).only("id").first()
+        # Allow only PUT and PATCH
+        if request.method not in ["PUT", "PATCH"]:
+            return JsonResponse(
+                {"error": "Only PUT or PATCH method allowed"},
+                status=405
+            )
+
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+        # fee_data = model_to_dict(fee, exclude=["updated_date", "created_date"])
+        # fee_data = json.loads(
+        #     json.dumps(fee_data, cls=DjangoJSONEncoder)
+        # )
+        # trx_data = {
+        #     **fee_data,
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
+        serializer = ExpenseDetailSerializer(fee)
+
+        IncomeChangeRequest.objects.create(
+            fee=fee,
+            edir=fee.edir,
+            action="DISABLE",
+            old_value= serializer.data, #model_to_json(fee, exclude=["updated_date"]), 
+            new_value= request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        logger.info(
+                f"Income disable request was recorded successfully it waits approval | new value={model_to_json(fee, exclude=['updated_date'])} | old value={model_to_json(fee, exclude=['updated_date'])} | requested by={request.user}"
+            )
+
+        # bank = Bank.objects.get(id=bank_id)
+        
+        # bank.status = "Not Active"
+        # bank.updated_date = timezone.now()
+        # bank.save()
+        return JsonResponse({
+            "message": "Income deactivation request recorded successfully",
+            "bank_id": fee.id,
+            "status": fee.status,
+            "updated_date": fee.updated_date,
+        }, status=200)
+
+    except Fee.DoesNotExist:
+        logger.exception(
+            f"Income disable request failed | fee not found | fee_name={fee.name if 'fee' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        )
+        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.exception(
+            f"Income disable request failed | fee={fee.name if 'fee' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(['POST'])
 def add_event(request, edir_id):
@@ -3976,21 +4236,11 @@ def get_edir_expenses(request, edir_id):
                 edir_id=edir_id,
                 status__in=["Active","Completed"]   
             )
-        expense_serializer = FeeDetailSerializer(expenses, many=True)
+        expense_serializer = ExpenseDetailSerializer(expenses, many=True)
         
         expenseRequest = ExpenseChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
         expenseRequestSerializer = ExpenseChangeRequestSerializer(expenseRequest, many=True)
 
-        # print(expenses)  # Debug: print the generated SQL query
-        # limit = request.query_params.get("limit")
-        # if limit:
-        #     try:
-        #         expenses = expenses[:int(limit)]
-        #     except ValueError:
-        #         return Response(
-        #             {"error": "Invalid limit"},
-        #             status=status.HTTP_400_BAD_REQUEST,
-        #         )
         serializer = Response({"expenses":expense_serializer.data, "expense_requests": expenseRequestSerializer.data})
         # serializer = ExpenseFeeSerializer(expenses, many=True)
         return Response(serializer.data, status=200)
@@ -4316,16 +4566,23 @@ def get_deposits_with_transactions(request, edir_id):
         transaction_qs = Transaction.objects.filter(
             edir_id=edir_id
         ).order_by("-created_at")
-        deposits = (
-            Deposit.objects
-            .filter(transactions__edir_id=edir_id)
-            .annotate(total_amount=Sum("transactions__amount"))
-            # .prefetch_related("deposit")
-            .prefetch_related(
-                Prefetch("transactions", queryset=transaction_qs)
+        # deposits = (
+        #     Deposit.objects
+        #     .filter(transactions__edir_id=edir_id)
+        #     .annotate(total_amount=Sum("transactions__amount"))
+        #     # .prefetch_related("deposit")
+        #     .prefetch_related(
+        #         Prefetch("transactions", queryset=transaction_qs)
+        #     )
+        #     .order_by("-created_at")
+        # )
+        incomes = Fee.objects.filter(
+                fee_type="Income",
+                edir_id=edir_id,
+                status="Active"  
             )
-            .order_by("-created_at")
-        )
+        income_serializer = FeeDetailSerializer(incomes, many=True)
+        
         undeposited_trxs = (
             Transaction.objects.filter(
                 # fee__edir_id=edir_id,
@@ -4359,9 +4616,9 @@ def get_deposits_with_transactions(request, edir_id):
         ]
         
         incomeRequest = IncomeChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
-        serializer = DepositSerializer(deposits, many=True)
-        return Response({"deposits": serializer.data, "undeposited": undeposited_data, "income_requests": ExpenseChangeRequestSerializer(incomeRequest, many=True).data}, status=200)
-
+        income_request_serializer = ExpenseChangeRequestSerializer(incomeRequest, many=True)
+        return Response({"incomes": income_serializer.data, "undeposited": undeposited_data, "income_requests": income_request_serializer.data}, status=200)
+# "deposits": serializer.data,
     except Exception as e:
         logger.exception(
             f"Fetch daily Edir incomes list failed | "
@@ -4396,15 +4653,32 @@ def get_expense_detail(request, fee_id):
     try:
         fee = Fee.objects.get(id=fee_id)
 
-        # assignments = (
-        #     FeeAssignment.objects
-        #     .filter(fee=fee)
-        #     .select_related("fee__supported_member", "transaction")
-        # )
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+
+        # trx_data = {
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
 
         serializer = ExpenseDetailSerializer(fee)
 
         return Response(
+            # {"expense": serializer.data, "trx": trx_data},
             serializer.data,
             # {
             # "fee_id": fee.id,
@@ -4430,6 +4704,48 @@ def get_expense_detail(request, fee_id):
             status=status.HTTP_404_NOT_FOUND
         )
     
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_income_detail(request, fee_id):
+    logger = logging.getLogger("income")
+    try:
+        fee = Fee.objects.get(id=fee_id)
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+
+        # trx_data = {
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
+
+        serializer = IncomeDetailSerializer(fee)
+
+        return Response( serializer.data,  status=200 )
+    except Exception as e:
+        logger.exception(
+            f"income detail fetching failed | fee={fee if 'fee' in locals() else 'Unknown'} | requested by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Fee not found or failed to fetch income details'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_fee_detail(request, fee_id):
@@ -4445,20 +4761,20 @@ def get_fee_detail(request, fee_id):
 
         serializer = FeeDetailSerializer(fee)
 
-        return Response(
-            {"fee": serializer.data,
-            "assigned_users": [
-                {
-                    "id": a.user.id,
-                    "full_name": a.user.full_name,
-                    "payment_status": a.transaction.payment_status if a.transaction else None,
-                    # "transaction_request_status": (
-                    #     a.transaction_change_request.status
-                    #     if a.transaction_change_request else None
-                    # ),
-                }
-                for a in assign_users
-            ]},
+        return Response( serializer.data,
+            # {"fee": serializer.data,
+            # "assigned_users": [
+            #     {
+            #         "id": a.user.id,
+            #         "full_name": a.user.full_name,
+            #         "payment_status": a.transaction.payment_status if a.transaction else None,
+            #         "transaction_request_status": (
+            #             a.transaction_change_request.status
+            #             if a.transaction_change_request else None
+            #         ),
+            #     }
+            #     for a in assign_users
+            # ]},
             status=200
         )
     except Exception as e:
@@ -4800,8 +5116,20 @@ def update_fee(request, fee_id):
 def add_expense(request, edir_id):
     logger = logging.getLogger("expense")
     try:
-        # data = request.data
-        # logger.info(f"Create fee request received | fee ={request.data} | edir_id={edir_id} | request_from {request.user}")
+        data = request.data
+        bank = Bank.objects.filter(
+            # edir=edir,
+            id=data.get("bank"),
+            # status="Active",
+        ).first()
+        
+        if bank and int(bank.amount) < int(data.get("amount", 0)):
+            return Response(
+                {
+                    "amount": "The expense amount exceeds the available balance."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         edir = Edir.objects.get(id=edir_id)
         maker = EdirUser.objects.filter(
             user=request.user,
@@ -4882,11 +5210,39 @@ def update_expense(request, fee_id):
             edir=fee.edir,
             status="Active"
         ).only("id").first()
+        
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+        # fee_data = model_to_dict(fee, exclude=["updated_date", "created_date"])
+        # fee_data = json.loads(
+        #     json.dumps(fee_data, cls=DjangoJSONEncoder)
+        # )
+        # trx_data = {
+        #     **fee_data,
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
+        serializer = ExpenseDetailSerializer(fee)
+        # data = {"expense": serializer.data, "trx": trx_data}
         ExpenseChangeRequest.objects.create(
             fee=fee,
             edir=fee.edir,
             action="UPDATE",
-            old_value= model_to_json(fee, exclude=["updated_date"]), # Exclude users to avoid large log entries
+            old_value= serializer.data, # model_to_dict(trx_data), # Exclude users to avoid large log entries
             new_value=request.data,
             maker=maker,
             status="PENDING",
@@ -4909,6 +5265,74 @@ def update_expense(request, fee_id):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def update_income(request, fee_id):
+    try:
+        fee = Fee.objects.get(id=fee_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=fee.edir,
+            status="Active"
+        ).only("id").first()
+        
+        # fee_assign = FeeAssignment.objects.filter(
+        #     fee=fee
+        # ).select_related(
+        #     "transaction__deposit__bank"
+        # ).first()
+
+        # trx = fee_assign.transaction if fee_assign and fee_assign.transaction else None
+        # fee_data = model_to_dict(fee, exclude=["updated_date", "created_date"])
+        # fee_data = json.loads(
+        #     json.dumps(fee_data, cls=DjangoJSONEncoder)
+        # )
+        # trx_data = {
+        #     **fee_data,
+        #     "payment_method": trx.payment_method if trx else None,
+        #     "bank_name": (
+        #         trx.deposit.bank.bank_name
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        #     "bank_id": (
+        #         trx.deposit.bank.id
+        #         if trx and trx.deposit and trx.deposit.bank
+        #         else None
+        #     ),
+        # }
+        serializer = IncomeDetailSerializer(fee)
+        # data = {"expense": serializer.data, "trx": trx_data}
+        IncomeChangeRequest.objects.create(
+            fee=fee,
+            edir=fee.edir,
+            action="UPDATE",
+            old_value= serializer.data, # model_to_dict(trx_data), # Exclude users to avoid large log entries
+            new_value=request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        logger.info(
+                f"Income update request was recorded successfully it waits approval | new value={request.data} | old value={model_to_json(fee, exclude=['updated_date'])} | requested by={request.user}"
+            )
+        
+        return Response(FeeSerializer(fee).data, status=status.HTTP_201_CREATED)
+    except Fee.DoesNotExist:
+        logger.exception(
+            f"Income update failed | Income not found | income={model_to_json(fee, exclude=['updated_date']) if 'fee' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        )
+        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.exception(
+            f"Income update failed | income={model_to_json(fee, exclude=['updated_date']) if 'fee' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
     
 
 @api_view(["GET"])
@@ -5790,17 +6214,7 @@ def approve_payments(request, id):
             bank = None
             if bank_id and str(bank_id).isdigit():
                 bank = Bank.objects.filter(id=int(bank_id)).first()
-            # edir= Edir.objects.get(id=edir_id)
-            # user = CustomUser.objects.get(id=user_id)
-
-            # assignments = FeeAssignment.objects.filter(
-            #     fee_id__in=fee_ids,
-            #     user=user,
-            #     transaction__isnull=True   # ✅ prevent double payment
-            # )
-
-            # if not assignments.exists():
-            #     return Response({"error": "No unpaid fees found"}, status=400)
+            
             if bank and method == "transfer":
                 deposit = Deposit.objects.create(
                     transaction_type="PAYMENT",

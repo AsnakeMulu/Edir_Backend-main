@@ -80,15 +80,19 @@ urlpatterns = [
     path("expense/detail/<int:fee_id>/", views.get_expense_detail, name="get-expense-detail"),
     path("add_expense/<int:edir_id>/", views.add_expense, name="add-expense"),
     path("expense/update/<int:fee_id>/", views.update_expense, name="update-expense"),
+    path("expense_disable/<int:fee_id>/", views.disable_expense, name="disable-expense"),
     path('approve_expense/<int:id>/', views.approve_expense, name='approve-expense'),
     path('reject_expense/<int:id>/', views.reject_expense, name='reject-expense'),
-    path("expense_disable/<int:fee_id>/", views.disable_expense, name="disable-expense"),
 
-    path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
-    # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
     path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
+    # path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
+    # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
+    path("income/detail/<int:fee_id>/", views.get_income_detail, name="get-income-detail"),
     path("add_income/<int:edir_id>/", views.add_income, name="add-income"),
+    path("income/update/<int:fee_id>/", views.update_income, name="update-income"),
+    path("income_disable/<int:fee_id>/", views.disable_income, name="disable-income"),
     path('approve_income/<int:id>/', views.approve_income, name='approve-income'),
+    path('reject_income/<int:id>/', views.reject_income, name='reject-income'),
 
     #Fee related endpoints
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
@@ -121,8 +125,6 @@ urlpatterns = [
     path("deposit/cashes/<int:edir_id>/", views.deposit_payments, name="deposit-cashs"),
     # path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
     # path("user/<int:edir_id>/payments/", views.user_payments, name="user_payments"),
-    # path("payment/add/", views.add_payment, name="add_payment"),
-    # path("payment/my/", views.my_payments, name="my_payments"),
     # path("edir/payments/", views.edir_payments, name="edir-payments"),
     
     #Event related endpoints

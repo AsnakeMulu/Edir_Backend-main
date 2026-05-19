@@ -2,7 +2,7 @@ from urllib import request
 
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest
+from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, FeeAssignmentTrxChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest
 import calendar
 from datetime import date
 from django.db.models import Sum
@@ -782,6 +782,7 @@ class FeeTrxSerializer(serializers.ModelSerializer):
         
 class FeeDetailSerializer(serializers.ModelSerializer):
     supported_member = SimpleEdirUserSerializer(read_only=True)
+    assigned_users = serializers.SerializerMethodField()
     has_edit_pending = serializers.SerializerMethodField()
     has_disable_pending = serializers.SerializerMethodField()
 
@@ -797,9 +798,40 @@ class FeeDetailSerializer(serializers.ModelSerializer):
             "payment_date",
             "created_date",
             "status",
+            "assigned_users",
             "has_edit_pending",
             "has_disable_pending",
         ]
+    def get_assigned_users(self, obj):
+        assignments = obj.feeassignment_fee.select_related(
+            "user",
+            "transaction"
+        ).all()
+
+        result = []
+
+        for a in assignments:
+            trx_request = FeeAssignmentTrxChangeRequest.objects.filter(
+                fee_assignment=a
+            ).select_related(
+                "trx_change_request"
+            ).first()
+
+            result.append({
+                "id": a.user.id,
+                "full_name": a.user.full_name,
+                "payment_status": (
+                    a.transaction.payment_status
+                    if a.transaction else None
+                ),
+                "transaction_request_status": (
+                    a.transaction_change_request.status
+                    if a.transaction_change_request
+                    else None
+                )
+            })
+
+        return result
     def get_has_edit_pending(self, obj):
         return FeeChangeRequest.objects.filter(
             fee=obj,
@@ -817,8 +849,12 @@ class FeeDetailSerializer(serializers.ModelSerializer):
 
 class ExpenseDetailSerializer(serializers.ModelSerializer):
     supported_member = SimpleEdirUserSerializer(read_only=True)
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
+    # has_disable_pending = serializers.SerializerMethodField()
+    
+    payment_method = serializers.SerializerMethodField()
+    bank_id = serializers.SerializerMethodField()
+    bank_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Fee
@@ -832,22 +868,145 @@ class ExpenseDetailSerializer(serializers.ModelSerializer):
             "payment_date",
             "created_date",
             "status",
-            "has_edit_pending",
-            "has_disable_pending",
+            "has_pending",
+            # "has_disable_pending",
+            "payment_method",
+            "bank_id",
+            "bank_name",
         ]
-    def get_has_edit_pending(self, obj):
+    def get_has_pending(self, obj):
         return ExpenseChangeRequest.objects.filter(
             fee=obj,
-            action="UPDATE",
+            # action="UPDATE",
             status="PENDING"
         ).exists()
 
-    def get_has_disable_pending(self, obj):
-        return ExpenseChangeRequest.objects.filter(
+    # def get_has_disable_pending(self, obj):
+    #     return ExpenseChangeRequest.objects.filter(
+    #         fee=obj,
+    #         action="DISABLE",
+    #         status="PENDING"
+    #     ).exists()
+    def get_payment_method(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction"
+        ).first()
+
+        if fee_assignment and fee_assignment.transaction:
+            return fee_assignment.transaction.payment_method
+
+        return None
+
+    def get_bank_name(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction__deposit__bank"
+        ).first()
+
+        if (
+            fee_assignment
+            and fee_assignment.transaction
+            and fee_assignment.transaction.deposit
+            and fee_assignment.transaction.deposit.bank
+        ):
+            return fee_assignment.transaction.deposit.bank.bank_name
+
+        return None
+
+    def get_bank_id(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction__deposit__bank"
+        ).first()
+
+        if (
+            fee_assignment
+            and fee_assignment.transaction
+            and fee_assignment.transaction.deposit
+            and fee_assignment.transaction.deposit.bank
+        ):
+            return fee_assignment.transaction.deposit.bank.id
+
+        return None
+    
+
+class IncomeDetailSerializer(serializers.ModelSerializer):
+    supported_member = SimpleEdirUserSerializer(read_only=True)
+    has_pending = serializers.SerializerMethodField()
+    # has_disable_pending = serializers.SerializerMethodField()
+
+    payment_method = serializers.SerializerMethodField()
+    bank_id = serializers.SerializerMethodField()
+    bank_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Fee
+        fields = [
+            "id",
+            "name",
+            "category",
+            "amount",
+            "reason",
+            "supported_member",
+            "payment_date",
+            "created_date",
+            "status",
+            "has_pending",
+            # "has_disable_pending",
+            "payment_method",
+            "bank_id",
+            "bank_name",
+        ]
+    def get_has_pending(self, obj):
+        return IncomeChangeRequest.objects.filter(
             fee=obj,
-            action="DISABLE",
+            # action="UPDATE",
             status="PENDING"
         ).exists()
+
+    # def get_has_disable_pending(self, obj):
+    #     return IncomeChangeRequest.objects.filter(
+    #         fee=obj,
+    #         action="DISABLE",
+    #         status="PENDING"
+    #     ).exists()
+    def get_payment_method(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction"
+        ).first()
+
+        if fee_assignment and fee_assignment.transaction:
+            return fee_assignment.transaction.payment_method
+
+        return None
+
+    def get_bank_name(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction__deposit__bank"
+        ).first()
+
+        if (
+            fee_assignment
+            and fee_assignment.transaction
+            and fee_assignment.transaction.deposit
+            and fee_assignment.transaction.deposit.bank
+        ):
+            return fee_assignment.transaction.deposit.bank.bank_name
+
+        return None
+
+    def get_bank_id(self, obj):
+        fee_assignment = obj.feeassignment_fee.select_related(
+            "transaction__deposit__bank"
+        ).first()
+
+        if (
+            fee_assignment
+            and fee_assignment.transaction
+            and fee_assignment.transaction.deposit
+            and fee_assignment.transaction.deposit.bank
+        ):
+            return fee_assignment.transaction.deposit.bank.id
+
+        return None
 
 class FeeWithAssignmentsSerializer(serializers.ModelSerializer):
     # assignments = FeeTrxSerializer(many=True, read_only=True)
@@ -882,6 +1041,7 @@ class ExpenseFeeSerializer(serializers.ModelSerializer):
 class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
     maker = SimpleEdirUserSerializer(read_only=True)
     fee = ExpenseDetailSerializer(read_only=True)
+    bank = BankSerializer(read_only=True)
 
     created_at = serializers.DateTimeField(
         format="%Y-%m-%d %H:%M:%S",
@@ -897,6 +1057,7 @@ class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
             "new_value",
             "old_value",
             "maker",
+            "bank",
             "created_at",
         ]
     def to_representation(self, instance):
@@ -904,6 +1065,20 @@ class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
 
         new_value = data.get("new_value")
         old_value = data.get("old_value")
+        
+        if new_value:
+            bank_id = new_value.get("bank")
+            if bank_id and str(bank_id).isdigit():  
+                bank = Bank.objects.filter(id=int(bank_id)).first()
+                if bank:
+                    new_value["bank"] = {
+                        "id": bank.id,
+                        "name": bank.bank_name
+                    }
+                else:
+                    new_value["bank"] = None
+            else:
+                new_value["bank"] = None
         if new_value and new_value.get("supported_member"):
             user_id = new_value["supported_member"]
 
@@ -915,8 +1090,23 @@ class ExpenseChangeRequestSerializer(serializers.ModelSerializer):
                 }
             except EdirUser.DoesNotExist:
                 pass
+        
+        if old_value:
+            bank_id = old_value.get("bank")
+            if bank_id and str(bank_id).isdigit():  
+                bank = Bank.objects.filter(id=int(bank_id)).first()
+                if bank:
+                    old_value["bank"] = {
+                        "id": bank.id,
+                        "name": bank.bank_name
+                    }
+                else:
+                    old_value["bank"] = None
+            else:
+                old_value["bank"] = None
+
         if old_value and old_value.get("supported_member"):
-            user_id = old_value["supported_member"]
+            user_id = old_value["supported_member"]["id"] if isinstance(old_value["supported_member"], dict) else old_value["supported_member"]
 
             try:
                 user = EdirUser.objects.get(id=user_id)
