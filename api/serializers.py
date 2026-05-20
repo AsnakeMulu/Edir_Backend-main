@@ -424,6 +424,44 @@ class FamilyChangeRequestSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+class PaymentSerializer(serializers.ModelSerializer):
+
+    fees = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Transaction
+        fields = [
+            "reference",
+            "amount",
+            "payment_method",
+            "created_at",
+            "transaction_type",
+            "payment_status",
+            "fees",
+        ]
+
+    def get_fees(self, obj):
+
+        fees = []
+
+        for assignment in obj.feeassignment_trx.all():
+
+            fee = assignment.fee
+
+            if fee:
+                fees.append({
+                    "id": fee.id,
+                    "name": fee.name,
+                    "category": fee.category,
+                    "amount": fee.amount,
+                    "supported_member": (
+                        fee.supported_member.full_name
+                        if fee.supported_member
+                        else None
+                    ),
+                })
+
+        return fees
 
 # class PaymentSerializer(serializers.ModelSerializer):
 #     user_name = serializers.CharField(source="user.username", read_only=True)
@@ -625,6 +663,7 @@ class DepositSerializer(serializers.ModelSerializer):
     bank = BankSerializer(read_only=True)
     user = SimpleEdirUserSerializer(read_only=True)
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    fees = serializers.SerializerMethodField()
 
     class Meta:
         model = Deposit
@@ -636,7 +675,38 @@ class DepositSerializer(serializers.ModelSerializer):
             "payment_method",
             "user",
             "total_amount",
+            "fees"
         ]
+    def get_fees(self, obj):
+
+        # only include fees for transfer deposits
+        if obj.payment_method != "TRANSFER":
+            return []
+
+        fees = []
+
+        for trx in obj.transactions.all():
+
+            assignments = trx.feeassignment_trx.select_related(
+                "fee"
+            ).all()
+
+            for assignment in assignments:
+
+                if assignment.fee:
+                    fees.append({
+                        "id": assignment.fee.id,
+                        "name": assignment.fee.name,
+                        "amount": assignment.fee.amount,
+                        "category": assignment.fee.category,
+                        "supported_member": (
+                            assignment.fee.supported_member.full_name
+                            if assignment.fee.supported_member
+                            else None
+                        ),
+                    })
+
+        return fees
 
 class SupportedMemberSerializer(serializers.Serializer):
     id = serializers.IntegerField()
@@ -783,8 +853,8 @@ class FeeTrxSerializer(serializers.ModelSerializer):
 class FeeDetailSerializer(serializers.ModelSerializer):
     supported_member = SimpleEdirUserSerializer(read_only=True)
     assigned_users = serializers.SerializerMethodField()
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
+    # has_disable_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = Fee
@@ -799,8 +869,8 @@ class FeeDetailSerializer(serializers.ModelSerializer):
             "created_date",
             "status",
             "assigned_users",
-            "has_edit_pending",
-            "has_disable_pending",
+            "has_pending",
+            # "has_disable_pending",
         ]
     def get_assigned_users(self, obj):
         assignments = obj.feeassignment_fee.select_related(
@@ -811,11 +881,11 @@ class FeeDetailSerializer(serializers.ModelSerializer):
         result = []
 
         for a in assignments:
-            trx_request = FeeAssignmentTrxChangeRequest.objects.filter(
-                fee_assignment=a
-            ).select_related(
-                "trx_change_request"
-            ).first()
+            # trx_request = FeeAssignmentTrxChangeRequest.objects.filter(
+            #     fee_assignment=a
+            # ).select_related(
+            #     "trx_change_request"
+            # ).first()
 
             result.append({
                 "id": a.user.id,
@@ -832,19 +902,19 @@ class FeeDetailSerializer(serializers.ModelSerializer):
             })
 
         return result
-    def get_has_edit_pending(self, obj):
+    def get_has_pending(self, obj):
         return FeeChangeRequest.objects.filter(
             fee=obj,
-            action="UPDATE",
+            # action="UPDATE",
             status="PENDING"
         ).exists()
 
-    def get_has_disable_pending(self, obj):
-        return FeeChangeRequest.objects.filter(
-            fee=obj,
-            action="DISABLE",
-            status="PENDING"
-        ).exists()
+    # def get_has_disable_pending(self, obj):
+    #     return FeeChangeRequest.objects.filter(
+    #         fee=obj,
+    #         action="DISABLE",
+    #         status="PENDING"
+    #     ).exists()
     
 
 class ExpenseDetailSerializer(serializers.ModelSerializer):

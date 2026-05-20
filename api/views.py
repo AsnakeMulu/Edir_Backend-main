@@ -10,7 +10,7 @@ from django.contrib.auth.hashers import make_password
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from .serializers import BankSerializer, DepositSerializer, EdirDetailHeaderSerializer, EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, TransactionSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer
+from .serializers import BankSerializer, DepositSerializer, EdirDetailHeaderSerializer, EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentSerializer, TransactionSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer
 from .serializers import UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer, ExpenseFeeSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, UserWithRoleSerializer, EdirUserWithNumFamSerializer, FamilyChangeRequestSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Deposit, DepositChangeRequest, EdirAuditLog, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, UserAuditLog, EdirUserAuditLog, BankAuditLog, FeeAuditLog, FeeAssignAuditLog, CustomUser, TrxAuditLog, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest
@@ -1620,44 +1620,44 @@ def approve_fee (request, id):
             )
             change.fee =fee
 
-            if assign_type == "All Members":
-                # members = edir.users.all()
-                members = EdirUser.objects.filter(
-                    edir=edir,
-                    status="Active"
-                )
-                for m in members:
-                    if supported_member and m == supported_member:
-                        continue
-                    else:
-                        FeeAssignment.objects.create(fee=fee, user=m) #, maker = request.user
+            # if assign_type == "All Members":
+            #     # members = edir.users.all()
+            #     members = EdirUser.objects.filter(
+            #         edir=edir,
+            #         status="Active"
+            #     )
+            #     for m in members:
+            #         if supported_member and m == supported_member:
+            #             continue
+            #         else:
+            #             FeeAssignment.objects.create(fee=fee, user=m) #, maker = request.user
                 
-                assigned_members_info = [
-                    {
-                        "id": m.id,
-                        "phone": m.phone_number
-                    }
-                    for m in members
-                ]
-                logger.info(
-                    f"fee created for all members successfully | "
-                    f"fee={fee} | "
-                    f"assigned_members={assigned_members_info} | "
-                    f"created_by={request.user.id, request.user.phone_number}"
-                )
+            #     assigned_members_info = [
+            #         {
+            #             "id": m.id,
+            #             "phone": m.phone_number
+            #         }
+            #         for m in members
+            #     ]
+            #     logger.info(
+            #         f"fee created for all members successfully | "
+            #         f"fee={fee} | "
+            #         f"assigned_members={assigned_members_info} | "
+            #         f"created_by={request.user.id, request.user.phone_number}"
+            #     )
                 
-            elif assign_type == "Custom Users":
-                user_ids = new.get("users", [])
-                for uid in user_ids:
-                    user = EdirUser.objects.get(id=uid)
-                    if supported_member and user == supported_member:
-                        continue
-                    else:
-                        FeeAssignment.objects.create(fee=fee, user=user)#, maker = request.user
-                
-                logger.info(
-                    f"fee created for custom members successfully | fee={fee} assigned members id = {user_ids} created by = {request.user.id}, {request.user.phone_number}"
-                )
+            # elif assign_type == "Custom Users":
+            user_ids = new.get("users", [])
+            for uid in user_ids:
+                user = EdirUser.objects.get(id=uid)
+                if supported_member and user == supported_member:
+                    continue
+                else:
+                    FeeAssignment.objects.create(fee=fee, user=user)#, maker = request.user
+            
+            logger.info(
+                f"fee created for custom members successfully | fee={fee} assigned members id = {user_ids} created by = {request.user.id}, {request.user.phone_number}"
+            )
             
             
             # FeeAssignment.objects.create(
@@ -1701,8 +1701,9 @@ def approve_fee (request, id):
             existing_assignments = FeeAssignment.objects.filter(fee=fee)
             for fee_assign in existing_assignments:
                 if str(fee_assign.user.id) not in user_ids:
-                    fee_assign.status = "Disabled"
+                    fee_assign.status = "Disabled" #?????
                     fee_assign.save()
+
             for uid in user_ids:
                 try:
                     user = EdirUser.objects.get(id=uid)
@@ -1745,6 +1746,12 @@ def approve_fee (request, id):
             fee.status = "Not Active"
             fee.updated_date = timezone.now()
             fee.save()
+
+            existing_assignments = FeeAssignment.objects.filter(fee=fee)
+            for fee_assign in existing_assignments:
+                fee_assign.status = "Disabled" 
+                fee_assign.save()
+
             logger.info(
             f"User approved fee deactivation request successfully | approved_by={request.user.id, request.user.phone_number} | fee={change.old_value}"
             )
@@ -2553,32 +2560,51 @@ def get_user_with_edirs(request):
             edir=edir,
             status="Active"
         ).only("id").first()
+        # payments = (
+        #     Transaction.objects.filter(
+        #         feeassignment_trx__user=current_user,
+        #         edir=edir,
+        #     )
+        #     .values(
+        #         "reference",
+        #         "amount",
+        #         "payment_method",
+        #         "created_at",
+        #         "transaction_type",
+        #         "payment_status",
+        #     )
+        #     .filter(
+        #         ~Q(payment_status="Paid") 
+        #     )
+        #     .annotate(
+        #         fee_count=Count("feeassignment_trx", distinct=True)
+        #     )
+        #     .order_by("-created_at")
+        #     .distinct()
+        # )
         payments = (
             Transaction.objects.filter(
                 feeassignment_trx__user=current_user,
                 edir=edir,
             )
-            .values(
-                "reference",
-                "amount",
-                "payment_method",
-                "created_at",
-                "transaction_type",
-                "payment_status",
-            )
-            .filter(
-                ~Q(payment_status="Paid") 
-            )
-            .annotate(
-                fee_count=Count("feeassignment_trx", distinct=True)
+            .exclude(payment_status="Paid")
+            .prefetch_related(
+                Prefetch(
+                    "feeassignment_trx",
+                    queryset=FeeAssignment.objects.select_related(
+                        "fee",
+                        "fee__supported_member",
+                    )
+                )
             )
             .order_by("-created_at")
             .distinct()
         )
         payments = payments[:5]
+        serializer = PaymentSerializer(payments, many=True)
         
         # print("has edir ", True)
-        return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments":payments, "has_edir":True})
+        return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
     else:
         # member = EdirUser.objects.filter(
         #     user=request.user,
@@ -2952,11 +2978,22 @@ def disable_fee(request, fee_id):
                 {"error": "Only PUT or PATCH method allowed"},
                 status=405
             )
+
+        old_value = model_to_dict(fee, exclude=["updated_date"])
+        if old_value.get("payment_date"):
+            old_value["payment_date"] = old_value["payment_date"].isoformat()
+
+        if old_value.get("created_date"):
+            old_value["created_date"] = old_value["created_date"].isoformat()
+
+        assigned_users = FeeAssignment.objects.filter(fee=fee).values_list("user_id", flat=True)
+        old_value["users"] = list(assigned_users)
+
         FeeChangeRequest.objects.create(
             fee=fee,
             edir=fee.edir,
             action="DISABLE",
-            old_value= model_to_json(fee, exclude=["updated_date"]), 
+            old_value= old_value, #model_to_json(fee, exclude=["updated_date"]), 
             new_value= request.data,
             maker=maker,
             status="PENDING",
