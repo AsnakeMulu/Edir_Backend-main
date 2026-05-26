@@ -215,6 +215,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "dashboard": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 

@@ -56,7 +56,7 @@ urlpatterns = [
 
     #Edir related endpoints
     path("edir/add/", views.add_edir, name="add_edir"),
-    path("user/", views.get_user_with_edirs, name="user-with-edirs"),
+    path("user/", views.get_user_with_edirs, name="user-with-edirs"), # Dashboard
     path("user_edirs/", views.get_user_edirs, name="user-edirs"),
     path("popular_edirs/", views.get_popular_edirs, name="popular-edirs"),
     path("requested_edirs/", views.get_requested_edirs, name="requested-edirs"),
@@ -84,6 +84,7 @@ urlpatterns = [
     path('approve_expense/<int:id>/', views.approve_expense, name='approve-expense'),
     path('reject_expense/<int:id>/', views.reject_expense, name='reject-expense'),
 
+    #Income related endpoints
     path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
     # path("incomes/details/<int:edir_id>/", views.get_daily_incomes_details, name="get-incomes-details"),
     # path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-edir-incomes"),
@@ -112,6 +113,7 @@ urlpatterns = [
     #Payment related endpoints
     path("user/payments/<int:user_id>/", views.get_user_payments, name="get_user_payments"),
     path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"),
+    path("transaction_details/<int:id>/", views.get_transaction_detail, name="get_transaction_detail"),
     path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"),
     path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),
     path("update_pay/fees/<int:edir_id>/", views.update_pay_fees, name="update-pay-fees"),

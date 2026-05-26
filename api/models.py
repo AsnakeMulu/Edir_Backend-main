@@ -802,8 +802,8 @@ class Deposit(models.Model):
         ("PAYMENT", "Payment"),
     )
     TRANSACTION_METHOD = (
-        ("CASH", "Cash"),
-        ("TRANSFER", "Transfer"),
+        ("CASH", "CASH"),
+        ("TRANSFER", "TRANSFER"),
     )
     STATUS = (
         ("REVERSED", "Reversed"),
@@ -865,8 +865,8 @@ class Transaction(models.Model):
         ("PAYMENT", "Payment"),
     )
     TRANSACTION_METHOD = (
-        ("CASH", "Cash"),
-        ("TRANSFER", "Transfer"),
+        ("CASH", "CASH"),
+        ("TRANSFER", "TRANSFER"),
     )
     STATUS = (
         ("PENDING", "Pending"),

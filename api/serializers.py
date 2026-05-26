@@ -423,9 +423,8 @@ class FamilyChangeRequestSerializer(serializers.ModelSerializer):
             "maker",
             "created_at",
         ]
-
+# Dashboard
 class PaymentSerializer(serializers.ModelSerializer):
-
     fees = serializers.SerializerMethodField()
 
     class Meta:
@@ -441,11 +440,9 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
 
     def get_fees(self, obj):
-
         fees = []
 
         for assignment in obj.feeassignment_trx.all():
-
             fee = assignment.fee
 
             if fee:
@@ -491,6 +488,7 @@ class UserWithEdirsSerializer(serializers.ModelSerializer):
 #         model = Bill
 #         fields = "__all__"
 
+# Dashboard
 class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
@@ -600,6 +598,58 @@ class EdirDetailSerializer(serializers.ModelSerializer):
         # members = [link.user for link in committee_links]
         return EdirUserWithNumFamSerializer(committees, many=True).data
     
+# Dashboard
+class EdirDetailOnDashboardSerializer(serializers.ModelSerializer):
+    member_count = serializers.SerializerMethodField()
+    unpaid_fees_total_amount = serializers.SerializerMethodField()
+    unpaid_fees_total = serializers.SerializerMethodField()
+    committee_members = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edir
+        fields = [
+            "id", "name", "monthly_fee", "meeting_date", "meeting_place",
+            "member_count", "unpaid_fees_total_amount","unpaid_fees_total", "committee_members"
+        ]
+    def get_member_count(self, obj):
+        return EdirUser.objects.filter(edir=obj, status="Active").count()
+    def get_unpaid_fees_total_amount(self, obj):
+        user = self.context.get("request").user
+        current_user = EdirUser.objects.filter(
+            user=user,
+            edir=obj,
+            status="Active"
+        ).only("id").first()
+        total = (
+            FeeAssignment.objects.filter(
+                user=current_user,
+                fee__edir=obj,
+                transaction=None,  
+            )
+            .aggregate(total=Sum("fee__amount"))["total"]
+        )
+        return total or 0
+    def get_unpaid_fees_total(self, obj):
+        user = self.context.get("request").user
+        current_user = EdirUser.objects.filter(
+            user=user,
+            edir=obj,
+            status="Active"
+        ).only("id").first()
+        total = FeeAssignment.objects.filter(
+                user=current_user,
+                fee__edir=obj,
+                transaction=None,  
+            ).count()
+        return total or 0
+    def get_committee_members(self, obj):
+        committees = EdirUser.objects.filter(
+            edir=obj,
+            is_committee=True,
+            status="Active"
+        )
+        return SimpleEdirUserSerializer(committees, many=True).data
+    
 
 class EdirDetailHeaderSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
@@ -707,6 +757,48 @@ class DepositSerializer(serializers.ModelSerializer):
                     })
 
         return fees
+
+
+class SimpleDepositSerializer(serializers.ModelSerializer):
+    # transactions = TransactionsSerializer(many=True, read_only=True)
+    bank = BankSerializer(read_only=True)
+    user = SimpleEdirUserSerializer(read_only=True)
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = Deposit
+        fields = [
+            "id",
+            "bank",
+            "created_at",
+            # "transactions",
+            "transaction_type",
+            "payment_method",
+            "user",
+            "total_amount",
+        ]
+
+
+class SimpleDepositSerializer2(serializers.ModelSerializer):
+    # transactions = TransactionsSerializer(many=True, read_only=True)
+    # bank = BankSerializer(read_only=True)
+    user = SimpleEdirUserSerializer(read_only=True)
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = Deposit
+        fields = [
+            "id",
+            # "bank",
+            "created_at",
+            # "transactions",
+            "transaction_type",
+            "payment_method",
+            "user",
+            "total_amount",
+        ]
+
+    
 
 class SupportedMemberSerializer(serializers.Serializer):
     id = serializers.IntegerField()
@@ -888,8 +980,8 @@ class FeeDetailSerializer(serializers.ModelSerializer):
             # ).first()
 
             result.append({
-                "id": a.user.id,
-                "full_name": a.user.full_name,
+                "id": a.user.id if a.user else None,
+                "full_name": a.user.full_name if a.user else None,
                 "payment_status": (
                     a.transaction.payment_status
                     if a.transaction else None
@@ -1526,5 +1618,17 @@ class TransactionSerializer(serializers.ModelSerializer):
         ).exists()
 
     def get_maker(self, obj):
-        return TransactionChangeRequest.objects.filter(
-            trx=obj).select_related("maker").values_list("maker__id", flat=True).first()
+        maker =  (
+            TransactionChangeRequest.objects
+            .filter(trx=obj)
+            .select_related("maker")
+            .values("maker__id", "maker__full_name")
+            .first()
+        )
+        if maker:
+            return {
+                "id": maker["maker__id"],
+                "full_name": maker["maker__full_name"],
+            }
+
+        return None

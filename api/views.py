@@ -1,4 +1,5 @@
 from asyncio.log import logger
+from weakref import ref
 
 from django.shortcuts import render
 from django.db.models import Count, Prefetch, Sum, F, OuterRef, Subquery, Exists, Q
@@ -11,7 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from .serializers import BankSerializer, DepositSerializer, EdirDetailHeaderSerializer, EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentSerializer, TransactionSerializer, UserWithEdirsSerializer, EdirDetailSerializer, EdirSerializer, FeeSerializer, FeeAssignmentReadOnlySerializer, ChangePasswordSerializer, FeeAssignmentDetailSerializer, FeeWithAssignmentsSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer
-from .serializers import UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer, ExpenseFeeSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, UserWithRoleSerializer, EdirUserWithNumFamSerializer, FamilyChangeRequestSerializer
+from .serializers import UserDetailSerializer, BankWithEdirSerializer, EdirDetailSerializer, UserWithNumFam2Serializer, EdirSerializer, EdirWithUserStatusSerializer, HelpSerializer, EventSerializer, ExpenseFeeSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, UserWithRoleSerializer, EdirUserWithNumFamSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, SimpleDepositSerializer2, EdirDetailOnDashboardSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Deposit, DepositChangeRequest, EdirAuditLog, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, UserAuditLog, EdirUserAuditLog, BankAuditLog, FeeAuditLog, FeeAssignAuditLog, CustomUser, TrxAuditLog, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest
 from django.utils import timezone
@@ -1036,7 +1037,7 @@ def approve_expense (request, id):
             )
             deposit = Deposit.objects.create(
                 transaction_type="WITHDRAW",
-                payment_method= "TRANSFER",
+                payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
                 user=checker,
@@ -1104,7 +1105,7 @@ def approve_expense (request, id):
             
             deposit = Deposit.objects.create(
                 transaction_type="WITHDRAW",
-                payment_method= "TRANSFER",
+                payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
                 user=checker,
@@ -1278,7 +1279,7 @@ def approve_income (request, id):
             )
             deposit = Deposit.objects.create(
                 transaction_type="PAYMENT",
-                payment_method= "TRANSFER",
+                payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
                 user=checker,
@@ -1337,7 +1338,7 @@ def approve_income (request, id):
 
             deposit = Deposit.objects.create(
                 transaction_type="PAYMENT",
-                payment_method= "TRANSFER",
+                payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
                 user=checker,
@@ -2502,121 +2503,75 @@ def list_edirs(request):
     serializer = EdirSerializer(edirs, many=True)
     return Response(serializer.data)
 
+# Dashboard
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_user_with_edirs(request):
     id = request.query_params.get('id')
-    # saved_id = request.data.get('saved_id')
     edirSerializer = None
-    # memberSerializer = None
     eventSerializer = None
     edir = None
-    # print("edir id = ", id)
 
-    if id is not None:
-        is_user_has_edir = EdirUser.objects.filter(
-            edir_id=id,
-            user=request.user,
-            status="Active"
-        ).exists()
-        # print("user has edir ", is_user_has_edir)
+    logger = logging.getLogger("dashboard")
+    try:
+        if id is not None:
+            is_user_has_edir = EdirUser.objects.filter(
+                edir_id=id,
+                user=request.user,
+                status="Active"
+            ).exists()
 
-        if is_user_has_edir:
-            edir = Edir.objects.filter(id=id).first()
-            # print("user selected edir ", edir)
+            if is_user_has_edir:
+                edir = Edir.objects.filter(id=id).first()
 
-    # if edir is None and saved_id is not None:
-    #     is_user_has_saved_edir = EdirUser.objects.filter(
-    #         edir_id=saved_id,
-    #         user=request.user,
-    #         status="Active"
-    #     ).exists()
+        if edir is None:
+            edir = Edir.objects.filter(
+                ediruser__user=request.user,
+                ediruser__status="Active"
+            ).first()
 
-    #     if is_user_has_saved_edir:
-    #         edir = Edir.objects.filter(id=saved_id).first()
-
-    if edir is None:
-        edir = Edir.objects.filter(
-            ediruser__user=request.user,
-            ediruser__status="Active"
-        ).first()
-        # print("system selected edir ", edir)
-
-    if edir is not None:
-        edirSerializer = EdirDetailSerializer(edir, context={"request": request})
-        # member = EdirUser.objects.filter(
-        #     edir=edir,
-        #     user=request.user,
-        #     status="Active"
-        # ).first()
-        # memberSerializer = EdirUserWithNumFamSerializer(member)
-        
-        event = Event.objects.filter(edir=edir, status="Active")
-        event = event[:3]
-        eventSerializer = EventSerializer(event, many=True)
-        
-        current_user = EdirUser.objects.filter(
-            user=request.user,
-            edir=edir,
-            status="Active"
-        ).only("id").first()
-        # payments = (
-        #     Transaction.objects.filter(
-        #         feeassignment_trx__user=current_user,
-        #         edir=edir,
-        #     )
-        #     .values(
-        #         "reference",
-        #         "amount",
-        #         "payment_method",
-        #         "created_at",
-        #         "transaction_type",
-        #         "payment_status",
-        #     )
-        #     .filter(
-        #         ~Q(payment_status="Paid") 
-        #     )
-        #     .annotate(
-        #         fee_count=Count("feeassignment_trx", distinct=True)
-        #     )
-        #     .order_by("-created_at")
-        #     .distinct()
-        # )
-        payments = (
-            Transaction.objects.filter(
-                feeassignment_trx__user=current_user,
+        if edir is not None:
+            current_user = EdirUser.objects.filter(
+                user=request.user,
                 edir=edir,
-            )
-            .exclude(payment_status="Paid")
-            .prefetch_related(
-                Prefetch(
-                    "feeassignment_trx",
-                    queryset=FeeAssignment.objects.select_related(
-                        "fee",
-                        "fee__supported_member",
-                    )
+                status="Active"
+            ).only("id").first()
+            
+            edirSerializer = EdirDetailOnDashboardSerializer(edir, context={"request": request})
+            
+            event = Event.objects.filter(edir=edir, status="Active").order_by("-created_date")[:3]
+            eventSerializer = EventSerializer(event, many=True)
+            
+            payments = (
+                Transaction.objects.filter(
+                    user=current_user,
+                    edir=edir,
+                    payment_status__in=["Paid", "PAID"]
                 )
-            )
-            .order_by("-created_at")
-            .distinct()
+                .prefetch_related(
+                    Prefetch(
+                        "feeassignment_trx",
+                        queryset=FeeAssignment.objects.select_related(
+                            "fee",
+                            "fee__supported_member",
+                        )
+                    )
+                ).order_by("-created_at")
+            )[:5]
+            serializer = PaymentSerializer(payments, many=True)
+            
+            return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
+        else:
+            return Response({"edir": None, "events": None, "payments":None, "has_edir":False})
+    except Exception as e:
+        logger.exception(
+            f"dashboard loading failed. | requested by={request.user} | error={str(e)}"
         )
-        payments = payments[:5]
-        serializer = PaymentSerializer(payments, many=True)
-        
-        # print("has edir ", True)
-        return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
-    else:
-        # member = EdirUser.objects.filter(
-        #     user=request.user,
-        #     status="Active"
-        # ).first()
-        # memberSerializer = EdirUserWithNumFamSerializer(member)
-        # print("has edir ", False)
-        return Response({"edir": None, "events": None, "payments":None, "has_edir":False})
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
-    # serializer = EdirSerializer(edir)
-    # serializer = UserWithEdirsSerializer(request.user)
-    # return Response(serializer.data)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -2792,20 +2747,20 @@ def get_bank_details(request, bank_id):
     try:
         bank = Bank.objects.get(id=bank_id)
         
-        transaction_qs = Transaction.objects.filter(
-            edir=bank.edir
-        ).order_by("-created_at")
+        # transaction_qs = Transaction.objects.filter(
+        #     edir=bank.edir
+        # ).order_by("-created_at")
         deposits = (
             Deposit.objects
             .filter(bank=bank)
-            .annotate(total_amount=Sum("transactions__amount"))
+            .annotate(total_amount=Sum("transactions__amount")).order_by("-created_at")
             # .prefetch_related("deposit")
-            .prefetch_related(
-                Prefetch("transactions", queryset=transaction_qs)
-            )
+            # .prefetch_related(
+            #     Prefetch("transactions", queryset=transaction_qs)
+            # )
         )
 
-        serializer = DepositSerializer(deposits, many=True)
+        serializer = SimpleDepositSerializer2(deposits, many=True)
         bank_serializer = BankWithEdirSerializer(bank)
 
         return Response(
@@ -3657,7 +3612,7 @@ def get_undeposited_trxs(request, edir_id):
         undeposited_trxs = (
             Transaction.objects.filter(
                 # fee__edir_id=edir_id,
-                payment_method="cash",
+                payment_method="CASH",
                 edir=edir,
                 deposit__isnull=True
             )
@@ -3889,6 +3844,59 @@ def get_payment_detail(request, ref):
             {"error": "Failed to fetch payments"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_transaction_detail(request, id):
+    logger = logging.getLogger("fetch_transaction")
+
+    try:
+
+        # transaction_qs = Transaction.objects.filter(
+        #     deposit_id=id
+        # ).order_by("-created_at")
+        # deposits = (
+        #     Deposit.objects
+        #     .filter(id=id)
+        #     .annotate(total_amount=Sum("transactions__amount"))
+        #     # .prefetch_related("deposit")
+        #     .prefetch_related(
+        #         Prefetch("transactions", queryset=transaction_qs)
+        #     )
+        # )
+
+        # serializer = DepositSerializer(deposits, many=True)
+
+        deposit = Deposit.objects.annotate(total_amount=Sum("transactions__amount")).get(id=id)
+        trx = (
+            Transaction.objects
+            .filter(deposit_id=id)
+            # .select_related("deposit")
+            .prefetch_related("feeassignment_trx__fee")   
+        )
+
+        if not trx:
+            logger.warning(
+                f"Payment not found | deposit_id={id} | requested by={request.user}"
+            )
+            return Response({"detail": "No transaction found."}, status=404)
+
+
+        serializer = TransactionSerializer(trx, context={"request": request}, many=True)
+        deposit_serializer = SimpleDepositSerializer(deposit)
+
+        return Response({"trxs" : serializer.data, "deposit": deposit_serializer.data}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.exception(
+            f"Fetch payment detail failed | ref={ref} | user={request.user} | error={str(e)}"
+        )
+        return Response(
+            {"error": "Failed to fetch payments"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
     
 # @api_view(['DELETE'])
 # @permission_classes([IsAuthenticated])
@@ -4600,9 +4608,9 @@ def get_edir_incomes(request, edir_id):
 def get_deposits_with_transactions(request, edir_id):
     logger = logging.getLogger("fetch_payment")
     try:
-        transaction_qs = Transaction.objects.filter(
-            edir_id=edir_id
-        ).order_by("-created_at")
+        # transaction_qs = Transaction.objects.filter(
+        #     edir_id=edir_id
+        # ).order_by("-created_at")
         # deposits = (
         #     Deposit.objects
         #     .filter(transactions__edir_id=edir_id)
@@ -4623,7 +4631,7 @@ def get_deposits_with_transactions(request, edir_id):
         undeposited_trxs = (
             Transaction.objects.filter(
                 # fee__edir_id=edir_id,
-                payment_method="cash",
+                payment_method="CASH",
                 edir_id=edir_id,
                 deposit__isnull=True
             )
@@ -4639,12 +4647,14 @@ def get_deposits_with_transactions(request, edir_id):
                     "full_name": a.user.full_name,
                 } if a.user else None,
                 "payment_date": a.created_at.isoformat(),
+                "payment_method": a.payment_method,
                 "fees": [
                 {
                     "id": fee_assignment.fee.id,
                     "name": fee_assignment.fee.name,
                     "amount": fee_assignment.fee.amount,
                     "category": fee_assignment.fee.category,
+                    "supported_member": fee_assignment.fee.supported_member.full_name if fee_assignment.fee.supported_member else None,
                 }
                 for fee_assignment in a.feeassignment_trx.all()
             ],
@@ -5391,7 +5401,7 @@ def get_edir_fees(request, edir_id):
         fees =  Fee.objects.filter(
                 edir=edir,
                 status="Active",
-                fee_type="Income",
+                fee_type="Fee",
             )
 
         fee_serializer = FeeDetailSerializer(fees, many=True)
@@ -5831,8 +5841,8 @@ def deposit_payments(request, edir_id):
             maker=maker,
             status="PAID",
         )
-        for cash in cashes_data:
-            trx = Transaction.objects.get(id=cash)
+        for cash_id in cashes_data:
+            trx = Transaction.objects.get(id=cash_id)
             trx.updated_date = timezone.now()
             trx.deposit = deposit
             trx.save()
@@ -6264,7 +6274,7 @@ def approve_payments(request, id):
                     # payment_status="PAID"
                     # reason=change.comment if change.comment else "Payment Disabled",
                 )
-            if prev_trx and method == "cash":
+            if prev_trx and method == "CASH":
                 deposit = prev_trx.deposit
             # ✅ create ONE transaction
             trx = Transaction.objects.create(
