@@ -5,7 +5,7 @@ from . import views
 
 urlpatterns = [
     #User and Member related endpoints
-    path('edirs/<int:edir_id>/members/', views.members_list_create, name='members-list-create'),
+    path('edirs/<int:edir_id>/members/', views.members_list_create, name='members-list-create'), # Members
     path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'),
     path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'),
@@ -24,7 +24,7 @@ urlpatterns = [
     path('user/<int:user_id>/', views.user_detail, name='user-detail'),
     path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'),
     path('member/<int:user_id>/', views.member_detail, name='member-detail'),
-    path('member/<int:user_id>/<int:edir_id>/', views.member_detail, name='member-detail-with-edir'),
+    path('member/<int:user_id>/<int:edir_id>/', views.member_detail, name='member-detail-with-edir'), # Member detail
     path('set-password/<uidb64>/<token>/', views.set_password, name='set-password'),
     
     path('check_user_phone/<int:phone_number>/', views.check_user_phone, name='check_user_phone'),
@@ -105,18 +105,18 @@ urlpatterns = [
     path('reject_fee/<int:id>/', views.reject_fee, name='reject-fee'),
     path("fee_request/detail/<int:id>/", views.get_fee_request_detail, name="get-fee-request-detail"),
 
-    path("fees/unpaid/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"),
-    path("fees/paid/<str:ref>/", views.get_paid_fees, name="get_paid_fees"),
+    path("fees/unpaid/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"), #unpaid list for add and update paymnet
+    path("fees/paid/<str:ref>/", views.get_paid_fees, name="get_paid_fees"), #paid list for add and update paymnet
     path("fee_detail/<int:id>/", views.get_fee_details, name="fee-details"),
     path("fee/<int:fee_id>/deactivate/", views.deactivate_fee, name="deactivate-fee"),
 
     #Payment related endpoints
-    path("user/payments/<int:user_id>/", views.get_user_payments, name="get_user_payments"),
-    path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"),
+    path("user/payments/<int:user_id>/", views.get_user_payments, name="get_user_payments"), #paymnet list
+    path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"), #payment detial
     path("transaction_details/<int:id>/", views.get_transaction_detail, name="get_transaction_detail"),
-    path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"),
-    path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),
-    path("update_pay/fees/<int:edir_id>/", views.update_pay_fees, name="update-pay-fees"),
+    path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"), #cash
+    path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),#Transfer
+    path("update_pay/fees/<int:edir_id>/", views.update_pay_fees, name="update-pay-fees"), #update payment
     path("disable_payment/<str:ref>/", views.disable_payment, name="disable-payment"),
     path("payment/approve/<int:id>/", views.approve_payments, name="approve-payments"),
     path("payment/reject/<int:id>/", views.reject_payment, name="reject-payments"),

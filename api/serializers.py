@@ -175,19 +175,70 @@ class EdirUserWithNumFamSerializer(serializers.ModelSerializer):
             status="PENDING"
         ).exists()
 
+class BankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bank
+        fields = [
+            'id', 'bank_name', 'account_number', 'account_name','status', 'amount', 
+        ]
+  
 
+class DepositForTransactionSerializer(serializers.ModelSerializer):
+    bank = BankSerializer(read_only=True)
+
+    class Meta:
+        model = Deposit
+        fields = [
+            "id",
+            "bank",
+            "image",
+        ]
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if  instance.image:
+            data['image'] = request.build_absolute_uri(instance.image.url) if request else instance.image.url
+        else:
+            data['image'] = None
+        return data
+
+
+# Members
+class SimpleEdirUserSerializer(serializers.ModelSerializer):
+    requests = serializers.SerializerMethodField()
+    class Meta:
+        model = EdirUser
+        fields = [
+            'id',
+            'full_name',
+            'phone_number',
+            'address',
+            'status',
+            'is_committee',
+            'requests'
+        ]
+    def get_requests(self, obj):
+        trx_request = TransactionChangeRequest.objects.filter(
+            user=obj,
+            status="PENDING"
+        ).count()
+        family_request = FamilyChangeRequest.objects.filter(
+            edir_user=obj,
+            status="PENDING"
+        ).count()
+        return trx_request + family_request
+
+# Member detail
 class EdirUserDetailSerializer(serializers.ModelSerializer):
     membership_status = serializers.SerializerMethodField()
-    
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
 
     class Meta:
         model = EdirUser
         fields = [
             'id',
-            'edir',
-            'user',
+            # 'edir',
+            # 'user',
             'full_name',
             'phone_number',
             'gender',
@@ -197,8 +248,7 @@ class EdirUserDetailSerializer(serializers.ModelSerializer):
             'status',
             'is_committee',
             'membership_status',
-            'has_edit_pending',
-            'has_disable_pending'
+            'has_pending',
         ]
 
     def get_membership_status(self, obj):
@@ -210,17 +260,9 @@ class EdirUserDetailSerializer(serializers.ModelSerializer):
 
         return "Edir Member"
     
-    def get_has_edit_pending(self, obj):
+    def get_has_pending(self, obj):
         return EdirUserChangeRequest.objects.filter(
             edir_user=obj,
-            action="UPDATE",
-            status="PENDING"
-        ).exists()
-
-    def get_has_disable_pending(self, obj):
-        return EdirUserChangeRequest.objects.filter(
-            edir_user=obj,
-            action="DISABLE",
             status="PENDING"
         ).exists()
 
@@ -279,12 +321,6 @@ class FamilyWithUserSerializer(serializers.ModelSerializer):
 #             "created_date", "meeting_date", "meeting_place",
 #         ]
 #         read_only_fields = ["id", "created_date", ]
-class BankSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Bank
-        fields = [
-            'id', 'bank_name', 'account_number', 'account_name','status', 'amount', 
-        ]
 
         
 class EdirChangeRequestSerializer(serializers.ModelSerializer):
@@ -650,7 +686,7 @@ class EdirDetailOnDashboardSerializer(serializers.ModelSerializer):
         )
         return SimpleEdirUserSerializer(committees, many=True).data
     
-
+# Member-Header
 class EdirDetailHeaderSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
 
@@ -675,18 +711,36 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 class FeeSerializer(serializers.ModelSerializer):
-    supported_member = SimpleUserSerializer(read_only=True)
+    supported_member = SimpleEdirUserSerializer(read_only=True)
 
     class Meta:
         model = Fee
         fields = "__all__"
 
-class TransactionSerializer(serializers.Serializer):
-    Trx_ref = serializers.CharField()
-    paid_date = serializers.DateTimeField()
-    method = serializers.CharField()
-    total_amount = serializers.IntegerField()#max_digits=10, decimal_places=2
-    fees = serializers.SerializerMethodField()
+class SimpleDepositSerializer(serializers.ModelSerializer):
+    bank = BankSerializer(read_only=True)
+    user = SimpleEdirUserSerializer(read_only=True)
+
+    class Meta:
+        model = Deposit
+        fields = [
+            "id",
+            "bank",
+            "created_at",
+        ]
+
+
+class AllTransactionSerializer(serializers.Serializer):
+    deposit = DepositForTransactionSerializer(read_only = True)
+    # Trx_ref = serializers.CharField()
+    # paid_date = serializers.DateTimeField()
+    # method = serializers.CharField()
+    # total_amount = serializers.IntegerField()#max_digits=10, decimal_places=2
+    # fees = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Transaction
+        fields = "__all__"
 
 #     def get_fees(self, obj):
 #         fees = FeeAssignment.objects.filter(Trx_ref=obj["Trx_ref"]).select_related("fee")
@@ -806,41 +860,41 @@ class SupportedMemberSerializer(serializers.Serializer):
 
 
 class FeeAssignmentReadOnlySerializer(serializers.ModelSerializer):
+    fee = FeeSerializer(read_only=True)
+    # user = SimpleEdirUserSerializer(read_only = True)
+    # transaction = AllTransactionSerializer(read_only = True)
     id = serializers.IntegerField(read_only=True)
 
-    fee_id = serializers.IntegerField(source="fee.id", read_only=True)
-    fee_name = serializers.CharField(source="fee.name", read_only=True)
-    category = serializers.CharField(source="fee.category", read_only=True)
-    amount = serializers.IntegerField(
-        source="fee.amount",
-        read_only=True
-    ) # max_digits=10, decimal_places=2,
-    payment_date = serializers.DateField(source="fee.payment_date", read_only=True)
+    # fee_id = serializers.IntegerField(source="fee.id", read_only=True)
+    # fee_name = serializers.CharField(source="fee.name", read_only=True)
+    # category = serializers.CharField(source="fee.category", read_only=True)
+    # amount = serializers.IntegerField(
+    #     source="fee.amount",
+    #     read_only=True
+    # ) # max_digits=10, decimal_places=2,
+    # payment_date = serializers.DateField(source="fee.payment_date", read_only=True)
     # payment_method = serializers.CharField(source="transaction.payment_method", read_only=True)
 
-    supported_member = serializers.SerializerMethodField()
+    # supported_member = serializers.SerializerMethodField()
 
     class Meta:
         model = FeeAssignment
         fields = [
             "id",
-            "fee_id",
-            "fee_name",
-            "category",
-            "amount",
-            "supported_member",
-            "payment_date",
-            # "payment_method",
+            "fee",
+            # "user",
+            "status",
+            # "transaction",
         ]
 
-    def get_supported_member(self, obj):
-        member = obj.fee.supported_member
-        if member:
-            return {
-                "id": member.id,
-                "full_name": member.full_name,
-            }
-        return None
+    # def get_supported_member(self, obj):
+    #     member = obj.fee.supported_member
+    #     if member:
+    #         return {
+    #             "id": member.id,
+    #             "full_name": member.full_name,
+    #         }
+    #     return None
 
 # class WithdrawalSerializer(serializers.ModelSerializer):
 #     # fee_name = serializers.CharField(source="fee.name", read_only=True)
@@ -1570,50 +1624,32 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
     def get_supported_member(self, obj):
         return obj.fee.supported_member.full_name if obj.fee.supported_member else None
 
+# Payment Details
 class TransactionSerializer(serializers.ModelSerializer):
-    ref = serializers.CharField(source="reference")
-    # bank_name = serializers.CharField(source="bank.bank_name", default=None)
-    # image = serializers.SerializerMethodField()
+    deposit = DepositForTransactionSerializer(read_only=True)  
     fees = FeeAssignmentSerializer(source="feeassignment_trx", many=True)
-    
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
     maker = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
 
-    total_amount = serializers.IntegerField(source="amount") #, max_digits=10, decimal_places=2
+    total_amount = serializers.IntegerField(source="amount")
     class Meta:
         model = Transaction
         fields = [
-            "ref",
+            "reference",
             "created_at",
             "payment_method",
-            # "bank_name",
-            # "image",
+            "transaction_type",
             "total_amount",
             "payment_status",
             "fees",
-            "has_edit_pending",
-            "has_disable_pending",
+            "has_pending",
             "maker",
+            "deposit"
         ]
 
-    def get_image(self, obj):
-        request = self.context.get("request")
-        if obj.image:
-            return request.build_absolute_uri(obj.image.url)
-        return None
-
-    def get_has_edit_pending(self, obj):
+    def get_has_pending(self, obj):
         return TransactionChangeRequest.objects.filter(
             prev_trx=obj,
-            action="UPDATE",
-            status="PENDING"
-        ).exists()
-
-    def get_has_disable_pending(self, obj):
-        return TransactionChangeRequest.objects.filter(
-            trx=obj,
-            action="DISABLE",
             status="PENDING"
         ).exists()
 

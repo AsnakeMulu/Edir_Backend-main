@@ -220,6 +220,46 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "approve_member": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "member_list": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "member_detail": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "fetch_unpaid_fee": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "fetch_paid_fee": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "approve_payment": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "transfer_payment": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "pay_cash": {
+            "handlers": ["daily_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
