@@ -385,8 +385,7 @@ class EdirWithUsersSerializer(serializers.ModelSerializer):
 
 
 class BankWithEdirSerializer(serializers.ModelSerializer):
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
     class Meta:
         model = Bank
         fields = [
@@ -397,24 +396,14 @@ class BankWithEdirSerializer(serializers.ModelSerializer):
             'amount',
             'status', 
             'edir', 
-            'has_edit_pending',
-            'has_disable_pending',
+            'has_pending',
         ]
-    
-    def get_has_edit_pending(self, obj):
+
+    def get_has_pending(self, obj):
         return BankChangeRequest.objects.filter(
             bank=obj,
-            action="UPDATE",
             status="PENDING"
         ).exists()
-
-    def get_has_disable_pending(self, obj):
-        return BankChangeRequest.objects.filter(
-            bank=obj,
-            action="DISABLE",
-            status="PENDING"
-        ).exists()
-
 
 class EdirUserChangeRequestSerializer(serializers.ModelSerializer):
     maker = SimpleEdirUserSerializer(read_only=True)

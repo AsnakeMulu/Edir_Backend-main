@@ -52,6 +52,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.ErrorLoggingMiddleware',
 ]
 
 REST_FRAMEWORK = {
@@ -161,102 +162,41 @@ LOGGING = {
 
     "formatters": {
         "standard": {
-            "format": "[{asctime}] {levelname} | {name} | {message}",
+            "format": "[{asctime}] {levelname} | {message}",
             "style": "{",
         },
     },
 
     "handlers": {
-        "daily_file": {
-            "level": "INFO",
+        "error_file": {
             "class": "logging.FileHandler",
             "filename": os.path.join(
-                LOG_DIR, f"user_registration_{today}.log"
+                LOG_DIR, f"error_{today}.log"
             ),
             "encoding": "utf-8",
             "formatter": "standard",
             "delay": True,
         },
+        "audit_file": {
+            "class": "logging.FileHandler",
+            "filename": os.path.join(
+                LOG_DIR,
+                f"audit_{today}.log"
+            ),
+            "formatter": "standard",
+            "encoding": "utf-8",
+        },
     },
 
     "loggers": {
-        "user_registration": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
+        "error_logger": {
+            "handlers": ["error_file"],
+            "level": "ERROR",
             "propagate": False,
         },
-        "edir_creation": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "fetch_payment": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "bank_account": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "fee": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "make_payment": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "expense": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "dashboard": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "approve_member": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "member_list": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "member_detail": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "fetch_unpaid_fee": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "fetch_paid_fee": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "approve_payment": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "transfer_payment": {
-            "handlers": ["daily_file"],
-            "level": "INFO",
-            "propagate": False,
-        },
-        "pay_cash": {
-            "handlers": ["daily_file"],
+
+        "audit_logger": {
+            "handlers": ["audit_file"],
             "level": "INFO",
             "propagate": False,
         },

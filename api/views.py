@@ -27,7 +27,7 @@ import json
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.forms.models import model_to_dict
 import logging
-from core.audit import model_to_json
+from core.audit import model_to_json, audit_log
 from django.core.serializers.json import DjangoJSONEncoder
 
 import calendar
@@ -36,44 +36,39 @@ from datetime import date
 
 User = get_user_model()
 
-# Get = Members
-@api_view(['GET', 'POST'])
+# Members
+@api_view(['GET'])
 @permission_classes([IsAuthenticated])  
-def members_list_create(request, edir_id=None):
-    logger = logging.getLogger("member_list")
+def members_list(request, edir_id=None):
     try:
-        if request.method == 'GET':
-            edir = Edir.objects.get(id=edir_id)
-            edirSerializer = EdirDetailHeaderSerializer(edir)
-            
-            edir_users = EdirUser.objects.filter(
-                edir=edir,
-                status="Active"
-            )
-            member_serializer = SimpleEdirUserSerializer(edir_users, many=True)
-            
-            userRequest = EdirUserChangeRequest.objects.filter(edir=edir, status="PENDING")
-            userRequestSerializer = EdirUserChangeRequestSerializer(userRequest, many=True)
+        edir = Edir.objects.get(id=edir_id)
+        edirSerializer = EdirDetailHeaderSerializer(edir)
+        
+        edir_users = EdirUser.objects.filter(
+            edir=edir,
+            status="Active"
+        )
+        member_serializer = SimpleEdirUserSerializer(edir_users, many=True)
+        
+        userRequest = EdirUserChangeRequest.objects.filter(edir=edir, status="PENDING")
+        userRequestSerializer = EdirUserChangeRequestSerializer(userRequest, many=True)
 
-            serializer = Response({"members":member_serializer.data, 
-                                   "member_requests": userRequestSerializer.data, 
-                                   "edir": edirSerializer.data})
-            
-            return Response(serializer.data, status=status.HTTP_200_OK) 
+        serializer = Response({"members":member_serializer.data, 
+                                "member_requests": userRequestSerializer.data, 
+                                "edir": edirSerializer.data})
+        
+        return Response(serializer.data, status=status.HTTP_200_OK) 
 
-        if request.method == 'POST':
-            data = request.data.copy()
-            data['edir'] = edir_id 
-            serializer = EdirUserWithNumFamSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+    except EdirUser.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.exception(
-            f"Fetch member lists failed | edir id = {edir_id} | error={str(e)}"
+        audit_log(
+            action="FETCH_MEMBER_LISTS",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id, "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -85,31 +80,41 @@ def members_list_create(request, edir_id=None):
 def active_members_list(request, edir_id=None):
     try:
         edir = Edir.objects.get(id=edir_id)
-
         edir_users = EdirUser.objects.filter(
             edir=edir,
             status="Active"
-        ).select_related("user")
-        # users = [eu.user for eu in edir_users]
+        )
 
-        serializer = EdirUserWithNumFamSerializer(edir_users, many=True, context={"edir_id": edir.id})
+        serializer = EdirUserDetailSerializer(edir_users, many=True, context={"edir_id": edir.id})
         return Response(serializer.data, status=status.HTTP_200_OK) 
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+    except EdirUser.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FETCH_ACTIVE_MEMBER_LISTS",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id, "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def members_by_edir(request, edir_id):
-    try:
-        edir = Edir.objects.get(id=edir_id)
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def members_by_edir(request, edir_id):
+#     try:
+#         edir = Edir.objects.get(id=edir_id)
         
-        # members = edir.users.all()
-        edir_users = EdirUser.objects.filter(edir=edir, status = "Active")
-        data = [{"id": m.id, "name": m.full_name} for m in edir_users]
-        return Response(data, status=status.HTTP_200_OK)
-    except Edir.DoesNotExist:
-        return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+#         # members = edir.users.all()
+#         edir_users = EdirUser.objects.filter(edir=edir, status = "Active")
+#         data = [{"id": m.id, "name": m.full_name} for m in edir_users]
+#         return Response(data, status=status.HTTP_200_OK)
+#     except Edir.DoesNotExist:
+#         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -122,76 +127,37 @@ def user_detail_with_family(request, user_id):
     serializer = UserDetailSerializer(user)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
-@api_view(['GET', 'PUT', 'PATCH'])
+# change password and user context
+@api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def user_detail(request, user_id, edir_id=None):
-    
-    logger = logging.getLogger("user_registration")
-    # current_user = EdirUser.objects.filter(
-    #         user=request.user,
-    #         edir=edir,
-    #         status="Active"
-    #     ).only("id").first()
     edir= None
     try:
         user = User.objects.get(id=user_id)
         membership = None
-        # membership_status = "Not a Member"
         if edir_id is not None:
             edir = Edir.objects.get(id=edir_id)
-            # membership = EdirUser.objects.get(user=user, edir=edir)
             membership = EdirUser.objects.filter(user=user, edir=edir).first()
         else:
             membership = EdirUser.objects.filter(user=user).first()
-            # print("membership", membership)
 
-        if request.method == 'GET':
-            serializer = EdirUserWithNumFamSerializer(membership)
-            # membership = GroupMembership.objects.get(user=user, group__edir_id=edir_id)
-            # response_data = serializer.data
-            # response_data["is_committee"] = membership.is_committee if membership else False
-            # response_data["membership_status"] = membership_status
-            return Response(serializer.data, status=status.HTTP_200_OK)
+        serializer = EdirUserDetailSerializer(membership)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-        elif request.method in ['PUT', 'PATCH']:
-            serializer = EdirUserWithNumFamSerializer(membership, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                is_committee = request.data.get("is_Committee", None)
-                if is_committee is not None:
-                    # membership = GroupMembership.objects.filter(user=user, group__edir_id=edir_id).first()
-                    membership = EdirUser.objects.filter(user=user, edir=edir).first()
-                    if membership:
-                        membership.is_committee = bool(is_committee)
-                        membership.save()
-
-                # return combined response
-                response_data = serializer.data
-                if membership:
-                    response_data["is_committee"] = membership.is_committee
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
     except User.DoesNotExist:
-        logger.exception(
-            f"Fetch user detail failed | user not found | user id = {user_id }"
-        )
-        return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     except Edir.DoesNotExist:
-        logger.exception(
-            f"Fetch user detail failed | edir not found | user id = {user_id}"
-        )
-        return Response({"detail": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
-    
+        return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
     except EdirUser.DoesNotExist:
-        logger.exception(
-            f"Fetch user detail failed | user edir not found | user id = {user_id}"
-        )
-        return Response({"detail": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.exception(
-            f"Fetch user detail failed | user id = {user_id} | error={str(e)}"
+        audit_log(
+            action="MEMBER_DETAIL",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": user_id,
+                        "edir_id": edir_id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -201,31 +167,49 @@ def user_detail(request, user_id, edir_id=None):
 # Member detail
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def member_detail(request, user_id, edir_id=None):
-    
-    logger = logging.getLogger("member_detail")
-    edir= None
+def member_details(request, user_id):
     try:
-        user = User.objects.get(id=user_id)
-        membership = None
-        if edir_id is not None:
-            edir = Edir.objects.get(id=edir_id)
-            # membership = EdirUser.objects.get(user=user, edir=edir)
-            membership = EdirUser.objects.filter(user=user, edir=edir).first()
-        else:
-            membership = EdirUser.objects.filter(user=user).first()
-            print("membership", membership)
-
+        membership = EdirUser.objects.get(id=user_id)
         serializer = EdirUserDetailSerializer(membership)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except EdirUser.DoesNotExist:
+        return Response({"error": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.exception(
-            f"Fetch member detail failed | user id = {user_id} | error={str(e)}"
+        audit_log(
+            action="MEMBER_DETAILS",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": user_id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def member_detail(request, user_id, edir_id=None):
+#     edir= None
+#     try:
+#         user = EdirUser.objects.get(id=user_id)
+#         membership = None
+#         if edir_id is not None:
+#             edir = Edir.objects.get(id=edir_id)
+#             membership = EdirUser.objects.filter(user=user, edir=edir).first()
+#         else:
+#             membership = EdirUser.objects.filter(user=user).first()
+
+#         serializer = EdirUserDetailSerializer(membership)
+#         return Response(serializer.data, status=status.HTTP_200_OK)
+#     except Exception as e:
+#         logger.exception(
+#             f"Fetch member detail failed | user id = {user_id} | error={str(e)}"
+#         )
+#         return Response(
+#             {'error': 'Internal server error'},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
 
 
 @api_view(["PUT"])
@@ -247,19 +231,26 @@ def update_member(request, member_id):
             maker=maker,
             status="PENDING",
         )
-        logger.info(
-                f"Member update request was recorded successfully it waits approval | new value={request.data} | old value={model_to_json(member, exclude=['updated_date'])} | requested by={request.user}"
-            )
-        
-        return Response(EdirUserWithNumFamSerializer(member).data, status=status.HTTP_201_CREATED)
-    except EdirUser.DoesNotExist:
-        logger.exception(
-            f"Member update failed | Member not found | member={model_to_json(member, exclude=['updated_date']) if 'member' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        audit_log(
+            action="UPDATE_MEMBER_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "user_id": member.id,
+                "maker_id": maker.id,
+            },
         )
+        return Response({"message": "Update member request sent for approval successfully"}, status=status.HTTP_201_CREATED)
+    except EdirUser.DoesNotExist:
         return Response({"error": "Member not found."},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.exception(
-            f"Member update failed | member={model_to_json(member, exclude=['updated_date']) if 'member' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
+        audit_log(
+            action="UPDATE_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": member_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -269,100 +260,67 @@ def update_member(request, member_id):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def self_register(request):
-    logger = logging.getLogger("user_registration")
-    if request.method == 'POST':
-        try:
-            log_data = request.data.copy()
-            log_data.pop("password", None)
-            log_data.pop("re_password", None)
-            # logger.info("Self registration request received | user data: " + json.dumps(log_data))
-            data = request.data  # Use request.data to get JSON payload
+    try:
+        log_data = request.data.copy()
+        log_data.pop("password", None)
+        log_data.pop("re_password", None)
+        data = request.data  
 
-            full_name = data.get('full_name')
-            phone_number = data.get('phone_number')
-            # email = data.get('email')
-            # gender = data.get('gender')
-            # marital_status = data.get('marital_status')
-            # profession = data.get('profession')
-            address = data.get('address')
-            password = data.get('password')
+        full_name = data.get('full_name')
+        phone_number = data.get('phone_number')
+        address = data.get('address')
+        password = data.get('password')
 
-            if not full_name or not phone_number:
-                logger.warning(
-                    f"Validation failed - Missing fields | data: {data}"
-                )
-                return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not full_name or not phone_number:
+            return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-            user = User.objects.create(
-                phone_number=phone_number,
-                # email=email,
-                # full_name=full_name,
-                # gender=gender,
-                # marital_status=marital_status,
-                # profession=profession,
-                # address=address,
-                password=make_password(password),
-            )
-            user.save()
-            UserChangeRequest.objects.create(
-                user=user,
-                action="CREATE",
-                new_value=model_to_dict(user, exclude=["password","last_login", "user_permissions","updated_date"]),
-                maker=user,
-                status="CREATED",
-            )
-
-            logger.info(
-                f"User Registered by self successfully | user={user} | added_by={request.user}"
-            )
-            edir_user = EdirUser.objects.create(
-                user=user,
-                # edir=edir,
-                phone_number = phone_number,
-                full_name=full_name,
-                # gender=gender,
-                # marital_status=marital_status,
-                # profession=profession,
-                address=address,
-                # is_committee=bool(is_committee),
-                # status="Active",
-                # joined_date=timezone.now(),
-            )
-
-            # edir_user = EdirUser.objects.get(user=user, edir=edir)
-            # edir_user.is_committee = bool(is_committee)
-            # edir_user.save()
-            # logger.info(
-            #     f"Member added to edir by admin successfully | new_user={edir_user} | edir={edir} | added_by={request.user} | is_committe={is_committee}"
-            # )
-            # EdirUserChangeRequest.objects.create(
-            #     edir_user=edir_user,
-            #     action="CREATE",
-            #     new_value=request.data,
-            #     maker=user,
-            #     status="CREATED",
-            # )
-            logger.info(
-                f"User registered successfully | user_data="+ json.dumps(model_to_json(user, exclude=["password","last_login", "updated_date"]))
-            )
-            return Response({'message': 'Registration successful'})
-        except Exception as e:
-            logger.exception(
-                f"Registration failed | user data = {request.data} | error={str(e)}"
-            )
-
-            return Response(
-                {'error': 'Internal server error'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        user = User.objects.create(
+            phone_number=phone_number,
+            password=make_password(password),
+        )
+        user.save()
+        UserChangeRequest.objects.create(
+            user=user,
+            action="CREATE",
+            new_value=model_to_dict(user, exclude=["password","last_login", "user_permissions","updated_date"]),
+            maker=user,
+            status="CREATED",
+        )
+        edir_user = EdirUser.objects.create(
+            user=user,
+            phone_number = phone_number,
+            full_name=full_name,
+            address=address,
+            # joined_date=timezone.now(),
+        )
+        audit_log(
+            action="SELF_REGISTRATION",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "phone_number": phone_number,
+                "full_name": full_name,
+            },
+        )
+        return Response({'message': 'Registration successful'})
+    except Exception as e:
+        audit_log(
+            action="SELF_REGISTRATION",
+            request=request,
+            status="FAILED",
+            extra_data={"phone_number": phone_number,
+                        "full_name": full_name,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['POST'])
 def admin_create_user(request, edir_id):
-    
-    logger = logging.getLogger("user_registration")
     try:
-        # logger.info(f"User added by admin request received | user ={request.data} | request_from {request.user}")
-        data = request.data  # Use request.data to get JSON payload
+        data = request.data  
 
         full_name = data.get('full_name')
         phone_number = data.get('phone_number')
@@ -373,9 +331,6 @@ def admin_create_user(request, edir_id):
         is_committee = data.get('is_committee', False)
 
         if not full_name or not phone_number:
-            logger.warning(
-                f"Validation failed - Missing fields | data: {data}"
-            )
             return Response({'error': 'full_name and phone_number are required'}, status=status.HTTP_400_BAD_REQUEST)
         
         edir = Edir.objects.get(id=edir_id)
@@ -394,7 +349,7 @@ def admin_create_user(request, edir_id):
         if committee_count < 2:
             if not is_committee:  # user is not committee
                 return Response(
-                    {"error": "First add committee to confirm"},
+                    {"error": "First add the second committee before add members"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             else:
@@ -413,10 +368,6 @@ def admin_create_user(request, edir_id):
                         maker=request.user,
                         status="CREATED",
                     )
-
-                    logger.info(
-                        f"User Created by admin successfully | user={user} | added_by={request.user}"
-                    )
                 
                 user = User.objects.filter(phone_number=phone_number).first()
                 edir_user = EdirUser.objects.create(
@@ -431,9 +382,6 @@ def admin_create_user(request, edir_id):
                     is_committee=bool(is_committee),
                     joined_date=timezone.now(),
                 )
-                logger.info(
-                    f"Member added to edir by admin successfully | new_user={edir_user} | edir={edir} | added_by={request.user} | is_committe={is_committee}"
-                )
                 EdirUserChangeRequest.objects.create(
                     edir_user=edir_user,
                     edir=edir,
@@ -442,10 +390,19 @@ def admin_create_user(request, edir_id):
                     maker=maker,
                     status="CREATED",
                 )
-        
+                audit_log(
+                    action="ADD_COMMITTEE_MEMBER",
+                    request=request,
+                    status="SUCCESS",
+                    extra_data={
+                        "phone_number": phone_number,
+                        "full_name": full_name,
+                        "edir_id": edir_id
+                    },
+                )
+            return Response({'message': 'Committee member added by admin successfully'}, status=status.HTTP_201_CREATED)
         else:
             EdirUserChangeRequest.objects.create(
-                # user=user_instance,
                 edir=edir,
                 action="CREATE",
                 new_value=request.data,
@@ -453,19 +410,31 @@ def admin_create_user(request, edir_id):
                 status="PENDING",
                 maker=maker,
             )
-
+            audit_log(
+                action="CREATE_MEMBER_REQUEST",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number": phone_number,
+                    "full_name": full_name,
+                    "edir_id": edir_id
+                },
+            )
             return Response(
                 {"message": "Request sent for approval"},
                 status=status.HTTP_201_CREATED
             )
 
-        return Response({'message': 'Member added by admin successfully'}, status=status.HTTP_201_CREATED)
-
     except Edir.DoesNotExist:
         return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        logger.exception(
-            f"User Registration failed user={edir_user if 'edir_user' in locals() else 'Unknown'}| added by={request.user} | error={str(e)}"
+        audit_log(
+            action="CREATE_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id, 
+                        "maker": maker.id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -477,7 +446,6 @@ def admin_create_user(request, edir_id):
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def approve_member (request, id):
-    logger = logging.getLogger("approve_member")
     try:
         change = EdirUserChangeRequest.objects.get(id=id)
         edir = change.edir
@@ -487,9 +455,6 @@ def approve_member (request, id):
             status="Active"
         ).only("id").first()
         if change.status != "PENDING":
-            logger.exception(
-                f"Member request approval failed because it's already processed | action={change.action} | user={change.edir_user} "
-            )
             return Response(
                 {"error": "Already processed"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -514,10 +479,6 @@ def approve_member (request, id):
                 )
                 user.set_unusable_password()
                 user.save()
-
-                logger.info(
-                    f"User Created by admin successfully | user={user} | added_by={request.user}"
-                )
             edir_user = None
             user = User.objects.filter(phone_number=phone_number).first()
             is_user_has_no_edir = EdirUser.objects.filter(Q(user=user, edir__isnull=True)).exists()
@@ -547,8 +508,15 @@ def approve_member (request, id):
                 )
             
             change.edir_user = edir_user
-            logger.info(
-                f"Member added to edir by admin successfully | new_user={edir_user} | edir={edir} | added_by={request.user} | is_committe={is_committee}"
+            audit_log(
+                action="APPROVE_CREATE_MEMBER",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number": phone_number,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
             )
         elif change.action == "UPDATE":
             edir_user.phone_number = phone_number
@@ -560,8 +528,15 @@ def approve_member (request, id):
             edir_user.is_committee = bool(is_committee)
             edir_user.updated_date=timezone.now()
             edir_user.save()
-            logger.info(
-                f"Member updated successfully | updated_user={edir_user} | updated_by={request.user}"
+            audit_log(
+                action="APPROVE_UPDATE_MEMBER",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number": phone_number,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
             )
 
         elif change.action == "DISABLE":
@@ -570,29 +545,34 @@ def approve_member (request, id):
             edir_user.status = "Not Active"
             edir_user.updated_date = timezone.now()
             edir_user.save()
-            logger.info(
-            f"User approved edir_user deactivation request successfully | approved_by={request.user.id, request.user.phone_number} | edir_user={change.old_value}"
+            audit_log(
+                action="APPROVE_DEACTIVATE_MEMBER",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number": phone_number,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
             )
 
         change.status = "APPROVED"
         change.approved_at = timezone.now()
         change.checker = checker
         change.save()
-        logger.info(
-            f"EdirUser creation request approval recorded successfully | approved_by={request.user.id, request.user.phone_number} | edir_user={change.edir_user if 'change' in locals() else 'Unknown'}"
-        )
-
-        return JsonResponse({
-            "message": "EdirUser request approved successfully",
-            "edir_user_id": edir_user.id,
-            "status": "Approved",
-            "updated_date": edir_user.updated_date,
-        }, status=200)
-    except Fee.DoesNotExist:
-        return JsonResponse({"error": "Member is not found "}, status=404)
+        return JsonResponse({"message": "The request was approved successfully", }, status=200)
+    except EdirUserChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "The change request is not found "}, status=404)
+    except EdirUser.DoesNotExist:
+        return JsonResponse({"error": "The checker is not found "}, status=404)
     except Exception as e:
-        logger.exception(
-            f"Member approval failed | member={change.new_value if 'change' in locals() else 'Unknown'} | approved by={request.user} | error={str(e)}"
+        audit_log(
+            action="APPROVE_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"request_id": id,
+                        "cheker_user_id": request.user.id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -603,7 +583,6 @@ def approve_member (request, id):
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def reject_member (request, id):
-    logger = logging.getLogger("expense")
     try:
         change = EdirUserChangeRequest.objects.get(id=id)
         reason = request.data.get('reason')
@@ -613,9 +592,6 @@ def reject_member (request, id):
             status="Active"
         ).only("id").first()
         if change.status != "PENDING":
-            logger.exception(
-                f"Member change request rejection failed because it's already processed | member={change.new_value} | rejected by={request.user} | error=Already processed"
-            )
             return Response(
                 {"error": "Already processed"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -625,27 +601,1182 @@ def reject_member (request, id):
         change.approved_at = timezone.now()
         change.checker = checker
         change.comment= reason
-        change.save()
-        logger.info(
-            f"User rejected member change request successfully | rejected_by={request.user.id, request.user.phone_number} | member={change.new_value}"
-        )       
-
+        change.save()      
+        audit_log(
+            action="APPROVE_DEACTIVATE_MEMBER",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "request_id": id,
+                "rejection_reason": reason,
+                "checker_id": checker.id
+            },
+        )
         return JsonResponse({
             "message": "Member request rejected successfully",
-            "member": change.new_value,
-            "status": "Rejected",
-            "updated_date": change.approved_at,
         }, status=200)
-    except Fee.DoesNotExist:
-        return JsonResponse({"error": "Member is not found "}, status=404)
+    except EdirUserChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "The change request is not found "}, status=404)
     except Exception as e:
-        logger.exception(
-            f"Member rejection failed | member_id={change.new_value if 'change' in locals() else 'Unknown'} | rejected by={request.user} | error={str(e)}"
+        audit_log(
+            action="REJECT_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"request_id": id,
+                        "cheker_user_id": request.user.id,
+                        "error": str(e)}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@api_view(['POST'])
+def add_existed_user(request, edir_id):
+    data = request.data
+    phone_number = data.get('phone_number')
+    is_committee = data.get('is_Committee', False)
+
+    try:
+        user = User.objects.get(phone_number=phone_number)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        edir = Edir.objects.get(id=edir_id)
+    except Edir.DoesNotExist:
+        return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Add user to Edir
+    edir.users.add(user)
+
+    # Get or create the related group
+    # group, created = CustomGroup.objects.get_or_create(
+    #     edir=edir,
+    #     name=f"Committee-{edir_id}"
+    # )
+
+    # Check if GroupMembership already exists
+    # membership, created = GroupMembership.objects.get_or_create(
+    #     user=user,
+    #     group=group,
+    #     defaults={'is_committee': bool(is_committee)}
+    # )
+
+    # If it exists but committee status changed, update it
+    # if not created and membership.is_committee != bool(is_committee):
+    #     membership.is_committee = bool(is_committee)
+    #     membership.save()
+
+    return Response({'message': 'User successfully added to Edir'}, status=status.HTTP_201_CREATED)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def check_user_in_edir(request, edir_id, phone_number):
+    try:
+        edir = Edir.objects.get(id=edir_id) 
+        user = User.objects.filter(phone_number=phone_number).first()
+
+        if user:
+            is_member = EdirUser.objects.filter(user=user, edir=edir).exists()
+            if is_member:
+                return Response({
+                    "exists": True,
+                    "message": "User is already a member of this edir"
+                }, status=200)
+
+        has_pending = EdirUserChangeRequest.objects.filter(
+            phone_number=phone_number,
+            edir=edir,
+            status="PENDING"
+        ).exists()
+
+        if has_pending:
+            return Response({
+                "exists": True,
+                "message": "User already has a pending request"
+            }, status=200)
+        
+        return Response({
+            "exists": False,
+            "message": "User is not a member and has no pending request"
+        }, status=200)
+    
+    except Edir.DoesNotExist:
+        return Response({ "error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="CHECK_USER_EXIST",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id, 
+                        "phone_number": phone_number,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# login
+@csrf_exempt
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])  # allow unauthenticated users
+def set_new_password(request):
+    phone_number = request.data.get("phone_number")
+    password = request.data.get("password")
+
+    if not phone_number or not password:
+        return Response(
+            {"error": "Phone number and password are required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    try:
+        user = User.objects.get(phone_number=phone_number)
+        # Only allow if the user has no usable password
+        if user.has_usable_password():
+            return Response(
+                {"error": "User already has a password. Please login instead."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # Set password
+        user.set_password(password)
+        user.save()
+        refresh = RefreshToken.for_user(user)
+        audit_log(
+                action="SET_NEW_PASSWORD",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number": phone_number,
+                    "user_id": user.id
+                },
+            )
+        return Response({"message": "Password set successfully"}, status=status.HTTP_200_OK)
+    except User.DoesNotExist:
+        return Response(
+            {"error": f"Phone {phone_number} does not exist"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        audit_log(
+            action="SET_NEW_PASSWORD",
+            request=request,
+            status="FAILED",
+            extra_data={"phone_number": phone_number,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# login
+@api_view(["POST"])
+@permission_classes([AllowAny])  
+def check_phone(request):
+    phone_number = request.data.get("phone_number")
+    if not phone_number:
+        return Response({"error": "Phone number is required"}, status=400)
+
+    try:
+        user = User.objects.get(phone_number=phone_number)
+        return Response({
+            "exists": True,
+            "has_password": user.has_usable_password()
+        })
+    except User.DoesNotExist:
+        return Response(
+            {"exists": False, "error": f"Phone {phone_number} not exist"},
+            status=404
+        )
+
+#login and registration
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def check_user_phone(request, phone_number):
+    try:
+        if not phone_number:
+            return Response({'error': 'Phone number is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        exists = User.objects.filter(phone_number=phone_number).exists()
+        edir_user_exists = EdirUser.objects.filter(phone_number=phone_number).exists()
+        return Response({
+            "phone_number": phone_number,
+            "exists": exists,
+            "edir_user_exists": edir_user_exists
+        }, status=status.HTTP_200_OK)
+    except User.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    except EdirUser.DoesNotExist:
+        return Response({"error": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="CHECK_MEMBER_PHONE",
+            request=request,
+            status="FAILED",
+            extra_data={"phone_number": phone_number,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def check_user_phoneNumber(request, phone_number):
+#     if not phone_number:
+#         return Response({'detail': 'Phone number is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+#     exists = User.objects.filter(phone_number=phone_number).exists()
+#     if (exists):
+#         user = User.objects.get(phone_number=phone_number)
+#         serializer = UserWithRoleSerializer(user)
+#         return Response({
+#         "user": serializer.data,
+#         "phone_number": phone_number,
+#         "exists": exists
+#     }, status=status.HTTP_200_OK)
+#     return Response({
+#         "phone_number": phone_number,
+#         "exists": exists
+#     }, status=status.HTTP_200_OK)
+
+# def set_password(request, user_id):
+#     if request.method == 'POST':
+#         user = User.objects.get(id=user_id)
+#         new_password = request.POST['password']
+#         user.set_password(new_password)
+#         user.save()
+#         return JsonResponse({'message': 'Password set successfully'})
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def deactivate_member(request, member_id):
+    try:
+        user = EdirUser.objects.get(id=member_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=user.edir,
+            status="Active"
+        ).only("id").first()
+        EdirUserChangeRequest.objects.create(
+            edir_user=user,
+            edir=user.edir,
+            action="DISABLE",
+            old_value= model_to_json(user, exclude=["updated_date"]), 
+            new_value= request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="DEACTIVATE_MEMBER_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "user_id": user.id,
+                "maker_id": maker.id,
+            },
+        )
+        return JsonResponse({
+            "message": "Member deactivation request sent for approval successfully",
+        }, status=200)
+
+    except Edir.DoesNotExist:
+        return JsonResponse({"error": "Edir not found"}, status=404)
+    except EdirUser.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
+    except Exception as e:
+        audit_log(
+            action="DEATIVATE_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": member_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+def add_family(request, user_id):
+    try:
+        user = EdirUser.objects.get(id=user_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=user.edir,
+            status="Active"
+        ).only("id").first()
+
+        FamilyChangeRequest.objects.create(
+            edir_user=user,
+            action="CREATE",
+            new_value=request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="ADD_FAMILY_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "maker_id":maker.id,
+                "user_id": user_id
+            },
+        )
+        return Response({'message': 'family added by admin'}, status=status.HTTP_201_CREATED)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="ADD_FAMILY_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": user_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_family_list(request, user_id):
+    try:
+        user = EdirUser.objects.get(id=user_id)
+        family = Family.objects.filter(user=user, status="Active")
+        family_serializer = FamilyWithUserSerializer(family, many=True)
+        
+        family_request = FamilyChangeRequest.objects.filter(edir_user=user, status="PENDING")
+        userRequestSerializer = FamilyChangeRequestSerializer(family_request, many=True)
+
+        serializer = Response({"families":family_serializer.data, "family_requests": userRequestSerializer.data})
+
+        return Response(serializer.data)
+    except User.DoesNotExist:
+        return Response({"detail": "Partner not added"}, status=status.HTTP_404_NOT_FOUND)
+    except Family.DoesNotExist:
+        return Response({"detail": "Family not added"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FAMILY_LIST",
+            request=request,
+            status="FAILED",
+            extra_data={"user_id": user_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def family_detail(request, family_id):
+    try:
+        family = Family.objects.get(id=family_id)
+        if request.method == 'GET':
+            serializer = FamilyWithUserSerializer(family)
+            return Response(serializer.data)
+        
+        elif request.method in ['PUT', 'PATCH']:
+            serializer = FamilyWithUserSerializer(family, data=request.data, partial=True)
+            if serializer.is_valid():
+                current_user = EdirUser.objects.filter(
+                    user=request.user,
+                    edir=family.user.edir,
+                    status="Active"
+                ).only("id").first()
+                FamilyChangeRequest.objects.create(
+                    family=family,
+                    edir_user=family.user,
+                    action="UPDATE",
+                    old_value= model_to_json(family, exclude=["updated_date"]), 
+                    new_value=request.data,
+                    maker=current_user,
+                    status="PENDING",
+                )
+                audit_log(
+                    action="UPATE_FAMILY_REQUEST",
+                    request=request,
+                    status="SUCCESS",
+                    extra_data={
+                        "maker_id":current_user.id,
+                        "user_id": family.user.id
+                    },
+                )
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Family.DoesNotExist:
+        return Response({"detail": "Family not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FAMILY_DETAIL",
+            request=request,
+            status="FAILED",
+            extra_data={"family_id": family_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def deactivate_family(request, family_id):
+    try:
+        family = Family.objects.get(id=family_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=family.user.edir,
+            status="Active"
+        ).only("id").first()
+
+        FamilyChangeRequest.objects.create(
+            family=family,
+            edir_user=family.user,
+            action="DISABLE",
+            old_value= model_to_json(family, exclude=["updated_date"]), 
+            new_value= request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="DEACTIVATE_FAMILY_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "maker_id":maker.id,
+                "user_id": family.user.id
+            },
+        )
+        return JsonResponse({"message": "Family deactivated successfully",}, status=200)
+    except Family.DoesNotExist:
+        return JsonResponse({"error": "Family not found"}, status=404)
+    except Exception as e:
+        audit_log(
+            action="DEACTIVATE_FAMILY_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"family_id": family_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def approve_family(request, id):
+    logger = logging.getLogger("member")
+    try:
+        change = FamilyChangeRequest.objects.get(id=id)
+        edir_user = change.edir_user
+        family=change.family
+        data = change.new_value
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir_user.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        full_name = data.get('full_name')
+        gender = data.get('gender')
+        relationship = data.get('relationship')
+        profession = data.get('profession')
+        
+        if change.action == "CREATE":
+            family = Family.objects.create(
+                user=edir_user,
+                full_name=full_name,
+                gender=gender,
+                relationship=relationship,
+                profession=profession,
+                created_date=timezone.now(),
+            )
+            change.family = family
+            audit_log(
+                action="APPROVE_CREATE_FAMILY",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "family_id": family.id,
+                    "family_request_id": id,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
+            )
+        elif change.action == "UPDATE":
+
+            family.full_name = full_name
+            family.gender = gender
+            family.relationship = relationship
+            family.profession = profession
+            family.save()
+            audit_log(
+                action="APPROVE_UPDATE_FAMILY",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "family_id": family.id,
+                    "family_request_id": id,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
+            )
+        elif change.action == "DISABLE":
+            change.comment = data.get("reason")
+
+            family.status = "Not Active"
+            family.updated_date = timezone.now()
+            family.save()
+            audit_log(
+                action="APPROVE_DISABLE_FAMILY",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "family_id": family.id,
+                    "family_request_id": id,
+                    "full_name": full_name,
+                    "checker_id": checker.id
+                },
+            )
+        change.status = "APPROVED"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        change.save()
+        return JsonResponse({"message": "Family request approved successfully"}, status=200)
+    except FamilyChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Family change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="APPROVE_FAMILY_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"request_id": id,
+                        "checker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def reject_family(request, id):
+    try:
+        change = FamilyChangeRequest.objects.get(id=id)
+        reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir_user.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Rejected"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        change.comment= reason
+        change.save()
+        audit_log(
+            action="REJECT_FAMILY_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "family_request_id": id,
+                "reason": reason,
+                "checker_id": checker.id
+            },
+        )
+        return JsonResponse({
+            "message": "Family request rejected successfully",
+            "family": change.new_value,
+            "status": "Rejected",
+            "updated_date": change.approved_at,
+        }, status=200)
+    except FamilyChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Family change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="REJECT_FAMILY_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"request_id": id,
+                        "checker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
+# def delete_family_member(request, family_id):
+#     try:
+#         family_member = Family.objects.get(id=family_id)
+#         family_member.delete()
+#         return Response({"message": "Family member deleted successfully"}, status=status.HTTP_200_OK)
+#     except Family.DoesNotExist:
+#         return Response({"error": "Family member not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def add_edir(request):
+    # print("Edir creation request received")
+    logger = logging.getLogger("edir_creation")
+    try:
+        #Create Edir
+        data = request.data
+        edir_user = None
+        serializer = EdirSerializer(data=data)
+        if serializer.is_valid():
+
+            edir = serializer.save() #created_by=request.user
+            logger.info(
+                f"Edir Created by User successfully | edir={data} | created by={request.user}"
+            )
+            
+            maker = EdirUser.objects.filter(
+                user=request.user,
+                edir=edir,
+                status="Active"
+            ).only("id").first()
+            EdirChangeRequest.objects.create(
+                edir=edir,
+                action="CREATE",
+                new_value=data,
+                maker=maker,
+                status="CREATED",
+            )
+            logger.info(
+                    f"Edir Creation request was recorded successfully but not need approval for creation | edir={data} | created by={request.user}"
+                )
+            
+            has_no_edir = EdirUser.objects.filter(user=request.user, edir__isnull=True).exists()
+            if has_no_edir:
+                edir_user = EdirUser.objects.filter(user=request.user, edir__isnull=True).first()
+                
+                edir_user.edir = edir
+                edir_user.is_committee=True
+                edir_user.joined_date = timezone.now()
+
+                edir_user.save()
+                
+                logger.info(
+                    f"User added to edir successfully when creating the edir as committee | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
+                )
+            else:
+                # Add creator as committee member of the Edir
+                id = request.data.get('id')
+                current_user = None
+                if id is not None:
+                    current_user = EdirUser.objects.filter(user=request.user, edir_id = id).first()
+                else:
+                    current_user = EdirUser.objects.filter(user=request.user).first()
+                edir_user = EdirUser.objects.create(
+                    user=request.user,
+                    edir=edir,
+                    phone_number = current_user.phone_number,
+                    full_name=current_user.full_name,
+                    address = current_user.address,
+                    gender = current_user.gender,
+                    marital_status = current_user.marital_status,
+                    profession= current_user.profession,
+                    image =current_user.image,
+                    is_committee=True,
+                    status="Active",
+                    joined_date=timezone.now()
+                )
+                logger.info(
+                    f"User added to edir successfully when creating the edir as committee | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
+                )
+
+            EdirUserChangeRequest.objects.create(
+                # user=request.user,
+                # edir=edir,
+                edir_user=edir_user,
+                action="ADD_MEMBER",
+                maker=maker,
+                new_value=model_to_json(edir_user),
+                status="CREATED", 
+            )
+            logger.info(
+                f"User added to edir request recorded successfully when creating the edir as committee but not approval needed | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
+                )
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            # print(serializer.errors)
+            logger.exception(
+            f"Edir Creation failed | edir name={edir.name if 'edir' in locals() else 'Unknown'} | created by={request.user} | errors={serializer.errors}"
+            )
+            return Response({'error': 'Bad request error', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.exception(
+            f"Edir Creation failed | edirname={edir.name if 'edir' in locals() else 'Unknown'} | created by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def add_edir(request):
+#     serializer = EdirSerializer(data=request.data)
+#     if serializer.is_valid():
+#         serializer.save(user=request.user)  # 👈 attach logged in user
+#         return Response(serializer.data, status=status.HTTP_201_CREATED)
+#     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# View all Edirs
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def list_edirs(request):
+    edirs = Edir.objects.all()
+    serializer = EdirSerializer(edirs, many=True)
+    return Response(serializer.data)
+
+# Dashboard
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_with_edirs(request):
+    id = request.query_params.get('id')
+    edirSerializer = None
+    eventSerializer = None
+    edir = None
+
+    logger = logging.getLogger("dashboard")
+    try:
+        if id is not None:
+            is_user_has_edir = EdirUser.objects.filter(
+                edir_id=id,
+                user=request.user,
+                status="Active"
+            ).exists()
+
+            if is_user_has_edir:
+                edir = Edir.objects.filter(id=id).first()
+
+        if edir is None:
+            edir = Edir.objects.filter(
+                ediruser__user=request.user,
+                ediruser__status="Active"
+            ).first()
+
+        if edir is not None:
+            current_user = EdirUser.objects.filter(
+                user=request.user,
+                edir=edir,
+                status="Active"
+            ).only("id").first()
+            
+            edirSerializer = EdirDetailOnDashboardSerializer(edir, context={"request": request})
+            
+            event = Event.objects.filter(edir=edir, status="Active").order_by("-created_date")[:3]
+            eventSerializer = EventSerializer(event, many=True)
+            
+            payments = (
+                Transaction.objects.filter(
+                    user=current_user,
+                    # edir=edir,
+                    payment_status__in=["Paid", "PAID"]
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "feeassignment_trx",
+                        queryset=FeeAssignment.objects.select_related(
+                            "fee",
+                            "fee__supported_member",
+                        )
+                    )
+                ).order_by("-created_at")
+            )[:5]
+            serializer = PaymentSerializer(payments, many=True)
+            
+            return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
+        else:
+            return Response({"edir": None, "events": None, "payments":None, "has_edir":False})
+    except Exception as e:
+        logger.exception(
+            f"dashboard loading failed. | requested by={request.user} | error={str(e)}"
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_edirs(request):
+    # edirs = request.user.edirs.all()
+    edirs = Edir.objects.filter(
+        ediruser__user=request.user,
+        ediruser__status="Active"   # <-- FILTER BY ACTIVE MEMBERSHIP
+    )
+    serializer = EdirSerializer(edirs, many=True)
+    # serializer = UserWithEdirsSerializer(request.user)
+    return Response(serializer.data)
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_popular_edirs(request):
+#     edirs = Edir.objects.filter(
+#         # ediruser__user=request.user,
+#         status="Active"   
+#     ).exclude(
+#         ediruser__user=request.user,
+#         ediruser__status__in=["Active", "Pending"]
+#     )
+#     serializer = EdirSerializer1(edirs, many=True)
+#     return Response(serializer.data)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_popular_edirs(request):
+    excluded_edirs = EdirUser.objects.filter(
+        user=request.user,
+        status__in=["Active", "Pending"]
+    ).values("edir_id")
+
+    edirs = Edir.objects.filter(
+        status="Active", is_popular = True
+    ).exclude(
+        id__in=Subquery(excluded_edirs)
+    )
+
+    serializer = EdirSerializer(edirs, many=True)
+    return Response(serializer.data)
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_requested_edirs(request):
+#     edirs = Edir.objects.filter(
+#         ediruser__user=request.user,
+#         ediruser__status="Pending" && ediruser__status="Rejected" 
+#     )
+#     serializer = EdirSerializer1(edirs, many=True)
+#     return Response(serializer.data)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_requested_edirs(request):
+    edirs = Edir.objects.filter(
+        ediruser__user=request.user,
+        ediruser__status__in=["Pending", "Rejected", "Cancelled"]
+    ).distinct()
+
+    serializer = EdirWithUserStatusSerializer(
+        edirs,
+        many=True,
+        context={"request": request}
+    )
+    return Response(serializer.data)
+
+
+
+@api_view(['POST'])
+def add_bank(request, edir_id):
+    try:
+        edir = Edir.objects.get(id=edir_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir,
+            status="Active"
+        ).only("id").first()
+        bank_request = BankChangeRequest.objects.create(
+            edir=edir,
+            action="CREATE",
+            new_value=request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="ADD_BANK_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "edir_id": edir_id,
+                "request_id": bank_request.id,
+                "maker_id": maker.id
+            },
+        )
+        return Response({'message': 'bank added by admin'}, status=status.HTTP_201_CREATED)
+
+    except Edir.DoesNotExist:
+        return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="ADD_BANK_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def edir_bank_list(request, edir_id):
+#     try:
+#         edir = Edir.objects.get(id=edir_id)
+#         bank = Bank.objects.filter(edir=edir)
+        
+#         serializer = BankWithEdirSerializer(bank, many=True)
+#         return Response(serializer.data)
+#     except Exception as e:
+#         audit_log(
+#             action="FETCH_BANK_LISTS",
+#             request=request,
+#             status="FAILED",
+#             extra_data={"edir_id": edir_id,
+#                         "fetcher_user_id": request.user.id,
+#                         "error": str(e)}
+#         )
+#         return Response(
+#             {'error': 'Internal server error'},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def edir_active_bank_list(request, edir_id):
+    try:
+        edir = Edir.objects.get(id=edir_id)
+        bank = Bank.objects.filter(edir=edir, status="Active")
+        
+        serializer = BankWithEdirSerializer(bank, many=True)
+        return Response(serializer.data)
+    except Exception as e:
+        audit_log(
+            action="FETCH_BANK_LISTS",
+            request=request,
+            status="FAILED",
+            extra_data={"edir_id": edir_id,
+                        "fetcher_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# @api_view(["GET"])
+# @permission_classes([IsAuthenticated])
+# def get_bank_details(request, bank_id):
+#     logger = logging.getLogger("bank_account")
+#     try:
+#         bank = Bank.objects.get(id=bank_id)
+#         bank_serializer = BankWithEdirSerializer(bank)
+
+#         return Response(bank_serializer.data, status=200)
+#     except Exception as e:
+#         logger.exception(
+#             f"bank detail fetching failed | bank={bank if 'bank' in locals() else 'Unknown'} | requested by={request.user} | error={str(e)}"
+#         )
+#         return Response(
+#             {'error': 'Bank not found or failed to fetch bank details'},
+#             status=status.HTTP_404_NOT_FOUND
+#         )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_bank_transactions(request, bank_id):
+    try:
+        bank = Bank.objects.get(id=bank_id)
+        
+        deposits = (
+            Deposit.objects
+            .filter(bank=bank, payment_status__in=["Paid", "PAID"])
+            .annotate(total_amount=Sum("transactions__amount"))
+            .order_by("-created_at")
+        )
+
+        serializer = SimpleDepositSerializer2(deposits, many=True)
+        return Response(serializer.data, status=200)
+    except Bank.DoesNotExist:
+        return Response({'error': 'Bank not found'},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FETCH_BANK_TRANSACTIONS",
+            request=request,
+            status="FAILED",
+            extra_data={"bank_id": bank_id,
+                        "fetcher_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Bank not found or failed to fetch bank transactions'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def bank_detail(request, bank_id):
+    try:
+        bank = Bank.objects.get(id=bank_id)
+        serializer = BankWithEdirSerializer(bank)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Bank.DoesNotExist:
+        return Response({"detail": "Bank not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="BANK_DETAIL",
+            request=request,
+            status="FAILED",
+            extra_data={"bank_id": bank_id,
+                        "fetcher_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'failed to fetch bank details'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def update_bank(request, bank_id):
+    try:
+        bank = Bank.objects.get(id=bank_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=bank.edir,
+            status="Active"
+        ).only("id").first()
+        BankChangeRequest.objects.create(
+            bank=bank,
+            edir=bank.edir,
+            action="UPDATE",
+            old_value= model_to_json(bank, exclude=["updated_date"]), 
+            new_value=request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        serializer = BankWithEdirSerializer(bank)
+        audit_log(
+            action="UPDATE_BANK_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "maker_id":maker.id,
+                "bank_id": bank.id
+            },
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Bank.DoesNotExist:
+        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="UPDATE_BANK_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"bank_id": bank_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def deactivate_bank(request, bank_id):
+    try:
+        bank = Bank.objects.get(id=bank_id)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=bank.edir,
+            status="Active"
+        ).only("id").first()
+        BankChangeRequest.objects.create(
+            bank=bank,
+            edir=bank.edir,
+            action="DISABLE",
+            old_value= model_to_json(bank, exclude=["updated_date"]), 
+            new_value= request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="DEACTIVATE_BANK_REQUEST",
+            request=request,
+            status="SUCCESS",
+            extra_data={
+                "maker_id":maker.id,
+                "bank_id": bank.id
+            },
+        )
+        return JsonResponse({"message": "Bank deactivation request recorded successfully"}, status=200)
+    except Bank.DoesNotExist:
+        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="DEACTIVATE_BANK_REQUEST",
+            request=request,
+            status="FAILED",
+            extra_data={"bank_id": bank.id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
+# def delete_bank(request, bank_id):
+#     try:
+#         bank = Bank.objects.get(id=bank_id)
+#         bank.delete()
+#         return Response({"message": "Bank deleted successfully"}, status=status.HTTP_200_OK)
+#     except Bank.DoesNotExist:
+#         return Response({"error": "Bank not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['POST'])
@@ -837,14 +1968,10 @@ def approve_bank (request, id):
     try:
         change = BankChangeRequest.objects.get(id=id)
         if change.status != "PENDING":
-            logger.exception(
-                f"Bank account create request approval failed because it's already processed | edirname={change.edir.name} | rejected by={request.user} "
-            )
             return Response(
                 {"error": "Already processed"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         edir = change.edir
         new = change.new_value
         checker = EdirUser.objects.filter(
@@ -856,25 +1983,29 @@ def approve_bank (request, id):
         account_name = new.get("account_name")
         account_number = new.get("account_number")
         bank_name = new.get("bank_name")
-        # print("change request", change.action)
         if change.action == "CREATE":
             bank = Bank.objects.create(
                 edir = edir,
                 account_name=account_name,
                 bank_name=bank_name,
                 account_number=account_number,
-                # maker = request.user,
                 status = "Active", 
                 created_date=timezone.now()
             )
             bank.save()
-            logger.info(
-                f"User approved bank account creation request successfully | approved_by={request.user.id, request.user.phone_number} | bank={bank}"
+            change.bank = bank
+            audit_log(
+                action="APPROVE_CREATE_BANK",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "bank_id": bank.id,
+                    "bank_request_id": id,
+                    "checker_id": checker.id
+                },
             )
         elif change.action == "UPDATE":
             bank = change.bank
-            # previous_bank = model_to_json(bank)
-
             bank.account_name = account_name
             bank.account_number = account_number
             bank.bank_name = bank_name
@@ -1843,1060 +2974,6 @@ def reject_fee (request, id):
         )
 
 
-
-@api_view(['POST'])
-def add_existed_user(request, edir_id):
-    data = request.data
-    phone_number = data.get('phone_number')
-    is_committee = data.get('is_Committee', False)
-
-    try:
-        user = User.objects.get(phone_number=phone_number)
-    except User.DoesNotExist:
-        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    try:
-        edir = Edir.objects.get(id=edir_id)
-    except Edir.DoesNotExist:
-        return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    # Add user to Edir
-    edir.users.add(user)
-
-    # Get or create the related group
-    # group, created = CustomGroup.objects.get_or_create(
-    #     edir=edir,
-    #     name=f"Committee-{edir_id}"
-    # )
-
-    # Check if GroupMembership already exists
-    # membership, created = GroupMembership.objects.get_or_create(
-    #     user=user,
-    #     group=group,
-    #     defaults={'is_committee': bool(is_committee)}
-    # )
-
-    # If it exists but committee status changed, update it
-    # if not created and membership.is_committee != bool(is_committee):
-    #     membership.is_committee = bool(is_committee)
-    #     membership.save()
-
-    return Response({'message': 'User successfully added to Edir'}, status=status.HTTP_201_CREATED)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def check_user_in_edir(request, edir_id, phone_number):
-    try:
-        edir = Edir.objects.get(id=edir_id) 
-        user = User.objects.filter(phone_number=phone_number).first()
-
-        if user:
-            is_member = EdirUser.objects.filter(user=user, edir=edir).exists()
-            if is_member:
-                return Response({
-                    "exists": True,
-                    "message": "User is already a member of this edir"
-                }, status=200)
-
-        has_pending = EdirUserChangeRequest.objects.filter(
-            phone_number=phone_number,
-            edir=edir,
-            status="PENDING"
-        ).exists()
-
-        if has_pending:
-            return Response({
-                "exists": True,
-                "message": "User already has a pending request"
-            }, status=200)
-        
-        return Response({
-            "exists": False,
-            "message": "User is not a member and has no pending request"
-        }, status=200)
-    
-    except Edir.DoesNotExist:
-        return Response({
-            "status": "error",
-            "message": "Edir not found"
-        }, status=status.HTTP_404_NOT_FOUND)
-    
-@csrf_exempt
-@api_view(["POST"])
-@authentication_classes([])
-@permission_classes([AllowAny])  # allow unauthenticated users
-def set_new_password(request):
-    phone_number = request.data.get("phone_number")
-    password = request.data.get("password")
-
-    if not phone_number or not password:
-        return Response(
-            {"error": "Phone number and password are required"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        user = User.objects.get(phone_number=phone_number)
-
-        # Only allow if the user has no usable password
-        if user.has_usable_password():
-            return Response(
-                {"error": "User already has a password. Please login instead."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Set password
-        user.set_password(password)
-        user.save()
-
-        # Auto-login: create JWT tokens
-        refresh = RefreshToken.for_user(user)
-
-        return Response({
-            "message": "Password set successfully",
-            "user": {
-                "id": user.id,
-                # "full_name": user.full_name,
-                "phone_number": user.phone_number,
-            },
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-        }, status=status.HTTP_200_OK)
-
-    except User.DoesNotExist:
-        return Response(
-            {"error": f"Phone {phone_number} does not exist"},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-@api_view(["POST"])
-@permission_classes([AllowAny])   # 👈 allow unauthenticated requests
-def check_phone(request):
-    phone_number = request.data.get("phone_number")
-    if not phone_number:
-        return Response({"error": "Phone number is required"}, status=400)
-
-    try:
-        user = User.objects.get(phone_number=phone_number)
-        return Response({
-            "exists": True,
-            "has_password": user.has_usable_password()
-        })
-    except User.DoesNotExist:
-        return Response(
-            {"exists": False, "error": f"Phone {phone_number} not exist"},
-            status=404
-        )
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def check_user_phone(request, phone_number):
-    if not phone_number:
-        return Response({'detail': 'Phone number is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    exists = User.objects.filter(phone_number=phone_number).exists()
-    edir_user_exists = EdirUser.objects.filter(phone_number=phone_number).exists()
-    return Response({
-        "phone_number": phone_number,
-        "exists": exists,
-        "edir_user_exists": edir_user_exists
-    }, status=status.HTTP_200_OK)
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def check_user_phoneNumber(request, phone_number):
-    if not phone_number:
-        return Response({'detail': 'Phone number is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    exists = User.objects.filter(phone_number=phone_number).exists()
-    if (exists):
-        user = User.objects.get(phone_number=phone_number)
-        serializer = UserWithRoleSerializer(user)
-        return Response({
-        "user": serializer.data,
-        "phone_number": phone_number,
-        "exists": exists
-    }, status=status.HTTP_200_OK)
-    return Response({
-        "phone_number": phone_number,
-        "exists": exists
-    }, status=status.HTTP_200_OK)
-
-def set_password(request, user_id):
-    if request.method == 'POST':
-        user = User.objects.get(id=user_id)
-        new_password = request.POST['password']
-        user.set_password(new_password)
-        user.save()
-        return JsonResponse({'message': 'Password set successfully'})
-
-
-@csrf_exempt
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def deactivate_member(request, member_id):
-    # Allow only PUT and PATCH
-    if request.method not in ["PUT", "PATCH"]:
-        return JsonResponse(
-            {"error": "Only PUT or PATCH method allowed"},
-            status=405
-        )
-    try:
-        # edir = Edir.objects.get(id = edir_id)
-        user = EdirUser.objects.get(id=member_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=user.edir,
-            status="Active"
-        ).only("id").first()
-        # edir_user = EdirUser.objects.get(user=user, edir = edir)
-
-        # edir_user.status = "Not Active"
-        # edir_user.updated_date = timezone.now()
-        # edir_user.save()
-        
-        EdirUserChangeRequest.objects.create(
-            edir_user=user,
-            edir=user.edir,
-            action="DISABLE",
-            old_value= model_to_json(user, exclude=["updated_date"]), 
-            new_value= request.data,
-            maker=maker,
-            status="PENDING",
-        )
-        logger.info(
-                f"Member disable request was recorded successfully it waits approval | new value={model_to_json(user, exclude=['updated_date'])} | old value={model_to_json(user, exclude=['updated_date'])} | requested by={request.user}"
-            )
-
-        return JsonResponse({
-            "message": "User deactivated from the Edir successfully",
-            "user_id": user.id,
-            # "edir_id": edir.id,
-            "status": user.status,
-            "updated_date": user.updated_date,
-        }, status=200)
-
-    except Edir.DoesNotExist:
-        return JsonResponse({"error": "Edir not found"}, status=404)
-
-    except User.DoesNotExist:
-        return JsonResponse({"error": "User not found"}, status=404)
-
-    except EdirUser.DoesNotExist:
-        return JsonResponse({"error": "User not found"}, status=404)
-
-@api_view(['POST'])
-def add_family(request, user_id):
-    # data = request.data  
-    # user = User.objects.get(id=user_id)
-    # partner = None
-    try:
-        user = EdirUser.objects.get(id=user_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=user.edir,
-            status="Active"
-        ).only("id").first()
-
-        FamilyChangeRequest.objects.create(
-            edir_user=user,
-            action="CREATE",
-            # old_value= model_to_json(edir, exclude=["updated_date", "users"]), # Exclude users to avoid large log entries
-            new_value=request.data,
-            maker=maker,
-            status="PENDING",
-        )
-
-        # relationship = data.get('relationship')
-        # full_name = data.get('full_name')
-        # gender = data.get('gender')
-        # # date_of_birth = data.get('date_of_birth')
-        # profession = data.get('profession')
-
-        # if not full_name :
-        #     return Response({'error': 'full_name is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # family = Family.objects.create(
-        #     user = user,
-        #     # partner= partner_user,
-        #     full_name=full_name,
-        #     gender=gender,
-        #     # date_of_birth=date_of_birth,
-        #     profession=profession,
-        #     relationship=relationship,
-        # )
-        # family.save()
-        return Response({'message': 'family added by admin'}, status=status.HTTP_201_CREATED)
-    except User.DoesNotExist:
-        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def user_family_list(request, user_id):
-    try:
-        user = EdirUser.objects.get(user_id=user_id)
-        family = Family.objects.filter(user=user, status="Active")
-        family_serializer = FamilyWithUserSerializer(family, many=True)
-        
-        family_request = FamilyChangeRequest.objects.filter(edir_user=user, status="PENDING")
-        userRequestSerializer = FamilyChangeRequestSerializer(family_request, many=True)
-
-        serializer = Response({"families":family_serializer.data, "family_requests": userRequestSerializer.data})
-
-        return Response(serializer.data)
-    except User.DoesNotExist:
-        return Response({"detail": "Partner not added"}, status=status.HTTP_404_NOT_FOUND)
-    except Family.DoesNotExist:
-        return Response({"detail": "Family not added"}, status=status.HTTP_404_NOT_FOUND)
-
-
-@api_view(['GET', 'PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def family_detail(request, user_id):
-    try:
-        family = Family.objects.get(id=user_id)
-        # user = EdirUser.objects.get()
-        if request.method == 'GET':
-            serializer = FamilyWithUserSerializer(family)
-            return Response(serializer.data)
-        
-        elif request.method in ['PUT', 'PATCH']:
-            serializer = FamilyWithUserSerializer(family, data=request.data, partial=True)
-            if serializer.is_valid():
-                current_user = EdirUser.objects.filter(
-                    user=request.user,
-                    edir=family.user.edir,
-                    status="Active"
-                ).only("id").first()
-                FamilyChangeRequest.objects.create(
-                    family=family,
-                    edir_user=family.user,
-                    action="UPDATE",
-                    old_value= model_to_json(family, exclude=["updated_date"]), 
-                    new_value=request.data,
-                    maker=current_user,
-                    status="PENDING",
-                )
-                # serializer.save()
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    except Family.DoesNotExist:
-        return Response({"detail": "Family not found"}, status=status.HTTP_404_NOT_FOUND)
-    
-
-@csrf_exempt
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def deactivate_family(request, family_id):
-    # Allow only PUT and PATCH
-    if request.method not in ["PUT", "PATCH"]:
-        return JsonResponse(
-            {"error": "Only PUT or PATCH method allowed"},
-            status=405
-        )
-    try:
-        family = Family.objects.get(id=family_id)
-        
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=family.user.edir,
-            status="Active"
-        ).only("id").first()
-
-    # family.status = "Not Active"
-    # family.updated_date = timezone.now()
-    # family.save()
-
-    
-        FamilyChangeRequest.objects.create(
-            family=family,
-            edir_user=family.user,
-            action="DISABLE",
-            old_value= model_to_json(family, exclude=["updated_date"]), 
-            new_value= request.data,
-            maker=maker,
-            status="PENDING",
-        )
-        logger.info(
-                f"Member disable request was recorded successfully it waits approval | new value={model_to_json(family, exclude=['updated_date'])} | old value={model_to_json(family, exclude=['updated_date'])} | requested by={request.user}"
-            )
-
-        return JsonResponse({
-            "message": "Family deactivated successfully",
-            "family_id": family.id,
-            "status": family.status,
-            "updated_date": family.updated_date,
-        }, status=200)
-
-    except Family.DoesNotExist:
-        return JsonResponse({"error": "Family not found"}, status=404)
-
-
-@csrf_exempt
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def approve_family(request, id):
-    logger = logging.getLogger("member")
-    try:
-        change = FamilyChangeRequest.objects.get(id=id)
-        edir_user = change.edir_user
-        family=change.family
-        data = change.new_value
-        checker = EdirUser.objects.filter(
-            user=request.user,
-            edir=edir_user.edir,
-            status="Active"
-        ).only("id").first()
-        if change.status != "PENDING":
-            logger.exception(
-                f"Family create request approval failed because it's already processed | familyname={change.new_value.get('full_name')} | rejected by={request.user} "
-            )
-            return Response(
-                {"error": "Already processed"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        full_name = data.get('full_name')
-        gender = data.get('gender')
-        relationship = data.get('relationship')
-        profession = data.get('profession')
-        
-        if change.action == "CREATE":
-            
-            family = Family.objects.create(
-                user=edir_user,
-                full_name=full_name,
-                gender=gender,
-                relationship=relationship,
-                profession=profession,
-                created_date=timezone.now(),
-            )
-            logger.info(
-                f"Family added approved to user by admin successfully | new_user={edir_user} | added_by={request.user}"
-            )
-        elif change.action == "UPDATE":
-
-            family.full_name = full_name
-            family.gender = gender
-            family.relationship = relationship
-            family.profession = profession
-            family.save()
-            logger.info(
-                f"Family updated successfully | updated_user={edir_user} | updated_by={request.user}"
-            )
-
-        elif change.action == "DISABLE":
-            change.comment = data.get("reason")
-
-            family.status = "Not Active"
-            family.updated_date = timezone.now()
-            family.save()
-            logger.info(
-            f"User approved family deactivation request successfully | approved_by={request.user.id, request.user.phone_number} | edir_user={change.old_value}"
-            )
-
-        change.status = "APPROVED"
-        change.approved_at = timezone.now()
-        change.checker = checker
-        change.save()
-        logger.info(
-            f"Family creation request approval recorded successfully | approved_by={request.user.id, request.user.phone_number} | family={change.family if 'change' in locals() else 'Unknown'}"
-        )
-
-        return JsonResponse({
-            "message": "Family request approved successfully",
-            # "family_id": family.id,
-            "status": "Approved",
-            # "updated_date": family.updated_date,
-        }, status=200)
-    except Fee.DoesNotExist:
-        return JsonResponse({"error": "Family is not found "}, status=404)
-    except Exception as e:
-        logger.exception(
-            f"Family approval failed | family={change.new_value if 'change' in locals() else 'Unknown'} | approved by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@csrf_exempt
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def reject_family(request, id):
-    logger = logging.getLogger("expense")
-    try:
-        change = FamilyChangeRequest.objects.get(id=id)
-        reason = request.data.get('reason')
-        checker = EdirUser.objects.filter(
-            user=request.user,
-            edir=change.edir_user.edir,
-            status="Active"
-        ).only("id").first()
-        if change.status != "PENDING":
-            logger.exception(
-                f"Family change request rejection failed because it's already processed | family={change.new_value} | rejected by={request.user} | error=Already processed"
-            )
-            return Response(
-                {"error": "Already processed"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        change.status = "Rejected"
-        change.approved_at = timezone.now()
-        change.checker = checker
-        change.comment= reason
-        change.save()
-        logger.info(
-            f"User rejected family change request successfully | rejected_by={request.user.id, request.user.phone_number} | family={change.new_value}"
-        )       
-
-        return JsonResponse({
-            "message": "Family request rejected successfully",
-            "family": change.new_value,
-            "status": "Rejected",
-            "updated_date": change.approved_at,
-        }, status=200)
-    except Fee.DoesNotExist:
-        return JsonResponse({"error": "Family is not found "}, status=404)
-    except Exception as e:
-        logger.exception(
-            f"Family rejection failed | family={change.new_value if 'change' in locals() else 'Unknown'} | rejected by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_family_member(request, family_id):
-    try:
-        family_member = Family.objects.get(id=family_id)
-        family_member.delete()
-        return Response({"message": "Family member deleted successfully"}, status=status.HTTP_200_OK)
-    except Family.DoesNotExist:
-        return Response({"error": "Family member not found"}, status=status.HTTP_404_NOT_FOUND)
-    
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def add_edir(request):
-    # print("Edir creation request received")
-    logger = logging.getLogger("edir_creation")
-    try:
-        #Create Edir
-        data = request.data
-        edir_user = None
-        serializer = EdirSerializer(data=data)
-        if serializer.is_valid():
-
-            edir = serializer.save() #created_by=request.user
-            logger.info(
-                f"Edir Created by User successfully | edir={data} | created by={request.user}"
-            )
-            
-            maker = EdirUser.objects.filter(
-                user=request.user,
-                edir=edir,
-                status="Active"
-            ).only("id").first()
-            EdirChangeRequest.objects.create(
-                edir=edir,
-                action="CREATE",
-                new_value=data,
-                maker=maker,
-                status="CREATED",
-            )
-            logger.info(
-                    f"Edir Creation request was recorded successfully but not need approval for creation | edir={data} | created by={request.user}"
-                )
-            
-            has_no_edir = EdirUser.objects.filter(user=request.user, edir__isnull=True).exists()
-            if has_no_edir:
-                edir_user = EdirUser.objects.filter(user=request.user, edir__isnull=True).first()
-                
-                edir_user.edir = edir
-                edir_user.is_committee=True
-                edir_user.joined_date = timezone.now()
-
-                edir_user.save()
-                
-                logger.info(
-                    f"User added to edir successfully when creating the edir as committee | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
-                )
-            else:
-                # Add creator as committee member of the Edir
-                id = request.data.get('id')
-                current_user = None
-                if id is not None:
-                    current_user = EdirUser.objects.filter(user=request.user, edir_id = id).first()
-                else:
-                    current_user = EdirUser.objects.filter(user=request.user).first()
-                edir_user = EdirUser.objects.create(
-                    user=request.user,
-                    edir=edir,
-                    phone_number = current_user.phone_number,
-                    full_name=current_user.full_name,
-                    address = current_user.address,
-                    gender = current_user.gender,
-                    marital_status = current_user.marital_status,
-                    profession= current_user.profession,
-                    image =current_user.image,
-                    is_committee=True,
-                    status="Active",
-                    joined_date=timezone.now()
-                )
-                logger.info(
-                    f"User added to edir successfully when creating the edir as committee | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
-                )
-
-            EdirUserChangeRequest.objects.create(
-                # user=request.user,
-                # edir=edir,
-                edir_user=edir_user,
-                action="ADD_MEMBER",
-                maker=maker,
-                new_value=model_to_json(edir_user),
-                status="CREATED", 
-            )
-            logger.info(
-                f"User added to edir request recorded successfully when creating the edir as committee but not approval needed | user={request.user.id, request.user.phone_number} | edir={edir.id, edir.name}"
-                )
-
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        else:
-            # print(serializer.errors)
-            logger.exception(
-            f"Edir Creation failed | edir name={edir.name if 'edir' in locals() else 'Unknown'} | created by={request.user} | errors={serializer.errors}"
-            )
-            return Response({'error': 'Bad request error', 'details': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        logger.exception(
-            f"Edir Creation failed | edirname={edir.name if 'edir' in locals() else 'Unknown'} | created by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def add_edir(request):
-#     serializer = EdirSerializer(data=request.data)
-#     if serializer.is_valid():
-#         serializer.save(user=request.user)  # 👈 attach logged in user
-#         return Response(serializer.data, status=status.HTTP_201_CREATED)
-#     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-# View all Edirs
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def list_edirs(request):
-    edirs = Edir.objects.all()
-    serializer = EdirSerializer(edirs, many=True)
-    return Response(serializer.data)
-
-# Dashboard
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_user_with_edirs(request):
-    id = request.query_params.get('id')
-    edirSerializer = None
-    eventSerializer = None
-    edir = None
-
-    logger = logging.getLogger("dashboard")
-    try:
-        if id is not None:
-            is_user_has_edir = EdirUser.objects.filter(
-                edir_id=id,
-                user=request.user,
-                status="Active"
-            ).exists()
-
-            if is_user_has_edir:
-                edir = Edir.objects.filter(id=id).first()
-
-        if edir is None:
-            edir = Edir.objects.filter(
-                ediruser__user=request.user,
-                ediruser__status="Active"
-            ).first()
-
-        if edir is not None:
-            current_user = EdirUser.objects.filter(
-                user=request.user,
-                edir=edir,
-                status="Active"
-            ).only("id").first()
-            
-            edirSerializer = EdirDetailOnDashboardSerializer(edir, context={"request": request})
-            
-            event = Event.objects.filter(edir=edir, status="Active").order_by("-created_date")[:3]
-            eventSerializer = EventSerializer(event, many=True)
-            
-            payments = (
-                Transaction.objects.filter(
-                    user=current_user,
-                    edir=edir,
-                    payment_status__in=["Paid", "PAID"]
-                )
-                .prefetch_related(
-                    Prefetch(
-                        "feeassignment_trx",
-                        queryset=FeeAssignment.objects.select_related(
-                            "fee",
-                            "fee__supported_member",
-                        )
-                    )
-                ).order_by("-created_at")
-            )[:5]
-            serializer = PaymentSerializer(payments, many=True)
-            
-            return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
-        else:
-            return Response({"edir": None, "events": None, "payments":None, "has_edir":False})
-    except Exception as e:
-        logger.exception(
-            f"dashboard loading failed. | requested by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_user_edirs(request):
-    # edirs = request.user.edirs.all()
-    edirs = Edir.objects.filter(
-        ediruser__user=request.user,
-        ediruser__status="Active"   # <-- FILTER BY ACTIVE MEMBERSHIP
-    )
-    serializer = EdirSerializer(edirs, many=True)
-    # serializer = UserWithEdirsSerializer(request.user)
-    return Response(serializer.data)
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def get_popular_edirs(request):
-#     edirs = Edir.objects.filter(
-#         # ediruser__user=request.user,
-#         status="Active"   
-#     ).exclude(
-#         ediruser__user=request.user,
-#         ediruser__status__in=["Active", "Pending"]
-#     )
-#     serializer = EdirSerializer1(edirs, many=True)
-#     return Response(serializer.data)
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_popular_edirs(request):
-    excluded_edirs = EdirUser.objects.filter(
-        user=request.user,
-        status__in=["Active", "Pending"]
-    ).values("edir_id")
-
-    edirs = Edir.objects.filter(
-        status="Active", is_popular = True
-    ).exclude(
-        id__in=Subquery(excluded_edirs)
-    )
-
-    serializer = EdirSerializer(edirs, many=True)
-    return Response(serializer.data)
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def get_requested_edirs(request):
-#     edirs = Edir.objects.filter(
-#         ediruser__user=request.user,
-#         ediruser__status="Pending" && ediruser__status="Rejected" 
-#     )
-#     serializer = EdirSerializer1(edirs, many=True)
-#     return Response(serializer.data)
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_requested_edirs(request):
-    edirs = Edir.objects.filter(
-        ediruser__user=request.user,
-        ediruser__status__in=["Pending", "Rejected", "Cancelled"]
-    ).distinct()
-
-    serializer = EdirWithUserStatusSerializer(
-        edirs,
-        many=True,
-        context={"request": request}
-    )
-    return Response(serializer.data)
-
-
-@api_view(['POST'])
-def add_bank(request, edir_id):
-    logger = logging.getLogger("bank_account")
-    data = request.data  
-    try:
-        edir = Edir.objects.get(id=edir_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=edir,
-            status="Active"
-        ).only("id").first()
-        # bank_name = data.get('bank_name')
-        # account_name = data.get('account_name')
-        # account_number = data.get('account_number')
-
-        BankChangeRequest.objects.create(
-            edir=edir,
-            action="CREATE",
-            # old_value= model_to_json(edir, exclude=["updated_date", "users"]), # Exclude users to avoid large log entries
-            new_value=request.data,
-            maker=maker,
-            status="PENDING",
-        )
-        
-        # bank = Bank.objects.create(
-        #     edir = edir,
-        #     account_name=account_name,
-        #     bank_name=bank_name,
-        #     account_number=account_number,
-        #     maker = request.user,
-        #     status = "Pending", 
-        #     created_date=timezone.now()
-        # )
-        # bank.save()
-        logger.info(
-            f"New Bank account creation request added successfully, needs approval | added_by={request.user.id, request.user.phone_number} | edir_id={edir_id} | bank={request.data}"
-        )
-        return Response({'message': 'bank added by admin'}, status=status.HTTP_201_CREATED)
-
-    except Edir.DoesNotExist:
-        return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.exception(
-            f"New Bank account creation request adding failed | edir_id={edir_id if 'edir_id' in locals() else 'Unknown'} | created by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def edir_bank_list(request, edir_id):
-    logger = logging.getLogger("bank_account")
-    try:
-        edir = Edir.objects.get(id=edir_id)
-        bank = Bank.objects.filter(edir=edir)
-        
-        serializer = BankWithEdirSerializer(bank, many=True)
-        # print(serializer.data)
-        return Response(serializer.data)
-    except Exception as e:
-        logger.exception(
-            f"Bank account fetching failed | edir_id={edir_id if 'edir_id' in locals() else 'Unknown'} | created by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def edir_active_bank_list(request, edir_id):
-    logger = logging.getLogger("bank_account")
-    try:
-        edir = Edir.objects.get(id=edir_id)
-        bank = Bank.objects.filter(edir=edir, status="Active")
-        
-        serializer = BankWithEdirSerializer(bank, many=True)
-        # print(serializer.data)
-        return Response(serializer.data)
-    except Exception as e:
-        logger.exception(
-            f"Bank account fetching failed | edir_id={edir_id if 'edir_id' in locals() else 'Unknown'} | created by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_bank_details(request, bank_id):
-    logger = logging.getLogger("bank_account")
-    try:
-        bank = Bank.objects.get(id=bank_id)
-        
-        # transaction_qs = Transaction.objects.filter(
-        #     edir=bank.edir
-        # ).order_by("-created_at")
-        deposits = (
-            Deposit.objects
-            .filter(bank=bank)
-            .annotate(total_amount=Sum("transactions__amount")).order_by("-created_at")
-            # .prefetch_related("deposit")
-            # .prefetch_related(
-            #     Prefetch("transactions", queryset=transaction_qs)
-            # )
-        )
-
-        serializer = SimpleDepositSerializer2(deposits, many=True)
-        bank_serializer = BankWithEdirSerializer(bank)
-
-        return Response(
-            {"deposits": serializer.data,
-            "bank": bank_serializer.data},
-            status=200
-        )
-    except Exception as e:
-        logger.exception(
-            f"bank detail fetching failed | bank={bank if 'bank' in locals() else 'Unknown'} | requested by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Bank not found or failed to fetch bank details'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-
-@api_view(['GET', 'PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def bank_detail(request, bank_id):
-    try:
-        bank = Bank.objects.get(id=bank_id)
-    except Bank.DoesNotExist:
-        return Response({"detail": "Bank not found"}, status=status.HTTP_404_NOT_FOUND)
-    
-    if request.method == 'GET':
-        serializer = BankWithEdirSerializer(bank)
-        return Response(serializer.data)
-    
-    elif request.method in ['PUT', 'PATCH']:
-        serializer = BankWithEdirSerializer(bank, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def update_bank(request, bank_id):
-    logger = logging.getLogger("bank_account")
-    try:
-        bank = Bank.objects.get(id=bank_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=bank.edir,
-            status="Active"
-        ).only("id").first()
-        BankChangeRequest.objects.create(
-            bank=bank,
-            edir=bank.edir,
-            action="UPDATE",
-            old_value= model_to_json(bank, exclude=["updated_date"]), # Exclude users to avoid large log entries
-            new_value=request.data,
-            maker=maker,
-            status="PENDING",
-        )
-        logger.info(
-                f"Bank update request was recorded successfully it waits approval | new value={request.data} | old value={model_to_json(bank, exclude=['updated_date'])} | requested by={request.user}"
-            )
-
-        serializer = BankWithEdirSerializer(bank)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    except Bank.DoesNotExist:
-        logger.exception(
-            f"Bank account update failed | bank not found | bankname={bank.account_name if 'bank' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
-        )
-        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.exception(
-            f"Bank account update failed | bankname={bank.account_name if 'bank' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-@csrf_exempt
-@api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def deactivate_bank(request, bank_id):
-    logger = logging.getLogger("bank_account")
-    try:
-        bank = Bank.objects.get(id=bank_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=bank.edir,
-            status="Active"
-        ).only("id").first()
-        # Allow only PUT and PATCH
-        if request.method not in ["PUT", "PATCH"]:
-            return JsonResponse(
-                {"error": "Only PUT or PATCH method allowed"},
-                status=405
-            )
-        BankChangeRequest.objects.create(
-            bank=bank,
-            edir=bank.edir,
-            action="DISABLE",
-            old_value= model_to_json(bank, exclude=["updated_date"]), 
-            new_value= request.data,
-            maker=maker,
-            status="PENDING",
-        )
-        logger.info(
-                f"Bank disable request was recorded successfully it waits approval | new value={model_to_json(bank, exclude=['updated_date'])} | old value={model_to_json(bank, exclude=['updated_date'])} | requested by={request.user}"
-            )
-
-        # bank = Bank.objects.get(id=bank_id)
-        
-        # bank.status = "Not Active"
-        # bank.updated_date = timezone.now()
-        # bank.save()
-        return JsonResponse({
-            "message": "Bank deactivation request recorded successfully",
-            "bank_id": bank.id,
-            "status": bank.status,
-            "updated_date": bank.updated_date,
-        }, status=200)
-
-    except Bank.DoesNotExist:
-        logger.exception(
-            f"Bank account disable request failed | bank not found | bankname={bank.account_name if 'bank' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
-        )
-        return Response({"error": "Bank not found."},status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.exception(
-            f"Bank account disable request failed | bankname={bank.account_name if 'bank' in locals() else 'Unknown'} | updated by={request.user} | error={str(e)}"
-        )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_bank(request, bank_id):
-    try:
-        bank = Bank.objects.get(id=bank_id)
-        bank.delete()
-        return Response({"message": "Bank deleted successfully"}, status=status.HTTP_200_OK)
-    except Bank.DoesNotExist:
-        return Response({"error": "Bank not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
 @csrf_exempt
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
@@ -3262,275 +3339,6 @@ def deactivate_event(request, event_id):
         "updated_date": event.updated_date,
     }, status=200)
 
-# # Add Payment
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def add_payment(request):
-#     user = request.user
-#     edir_id = request.data.get("edirId")
-#     edir = Edir.objects.get(id=edir_id)
-#     month = request.data.get("month")  
-#     amount = request.data.get("amount")
-
-#     if Bill.objects.filter(user=user, edir=edir, month=month).exists():
-#         return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
-
-#     payment = Payment.objects.create(
-#         user=user,
-#         edir=edir,
-#         month=month,
-#         amount=amount
-#     )
-
-#     serializer = PaymentSerializer(payment)
-#     # if serializer.is_valid():
-#     # serializer.save()
-#     return Response(serializer.data, status=status.HTTP_201_CREATED)
-#     # return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-# View Payments for logged-in user
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def my_payments(request):
-#     payments = Payment.objects.filter(user=request.user).order_by("-payment_date")
-#     serializer = PaymentSerializer(payments, many=True)
-#     return Response(serializer.data)
-
-# View All Payments (Admin use)
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def all_payments(request):
-#     if not request.user.is_staff:
-#         return Response({"detail": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
-#     payments = Payment.objects.all().order_by("-payment_date")
-#     serializer = PaymentSerializer(payments, many=True)
-#     return Response(serializer.data)
-
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def pay_bill(request):
-
-#     reason = request.data.get("reason")
-#     method = request.data.get("method")
-#     if(method == "cash"):
-#         is_paid = True
-#     else:
-#         is_paid = False
-#     payment = Payment.objects.create(
-#         method=method,
-#         is_paid = is_paid,
-#         reason = reason
-#         # transaction_id=request.data.get("transactionId", None),
-#     )
-#     return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def generate_bill(request):
-#     payment = None
-#     edir = None
-#     user= None
-#     user_id = request.data.get("user")
-#     if user_id == None:
-#         user = request.user
-#     else:
-#         try:
-#             user = User.objects.get(id=user_id)
-#         except User.DoesNotExist:
-#             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-#     edir_id = request.data.get("edirId")
-#     month = request.data.get("month")
-#     amount = request.data.get("amount")
-#     payment_id = request.data.get("payment_id")
-#     transaction_type = request.data.get("transaction_type")
-    
-#     try:
-#         edir = Edir.objects.get(id=edir_id)
-#     except Edir.DoesNotExist:
-#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-#     # Check if bill already exists
-#     if Bill.objects.filter(user=user, edir=edir, month=month).exists():
-#         return Response({"detail": "Bill already exists."}, status=status.HTTP_400_BAD_REQUEST)
-    
-#     try:
-#         payment = Payment.objects.get(id=payment_id)
-#     except Payment.DoesNotExist:
-#         return Response({"detail": "Payment not found."}, status=status.HTTP_404_NOT_FOUND)
-
-#     bill = Bill.objects.create(
-#         user=user,
-#         edir=edir,
-#         # is_paid = True,
-#         payment=payment,
-#         month=month,
-#         amount=amount, #edir.monthly_fee,
-#         transaction_type = transaction_type,
-#     )
-
-#     return Response(BillSerializer(bill).data, status=status.HTTP_201_CREATED)
-
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def pay_and_generate_bill(request):
-#     user = request.user
-#     edir_id = request.data.get("edirId")
-#     month = request.data.get("month")
-
-#     if not edir_id or not month:
-#         return Response({"detail": "edirId and month are required."}, status=status.HTTP_400_BAD_REQUEST)
-
-#     try:
-#         edir = Edir.objects.get(id=edir_id)
-#     except Edir.DoesNotExist:
-#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-
-#     # prevent duplicate bill
-#     if Bill.objects.filter(user=user, edir=edir, month=month).exists():
-#         return Response({"detail": "Bill already exists for this month."}, status=status.HTTP_400_BAD_REQUEST)
-
-#     try:
-#         with transaction.atomic():  # ensures all or nothing
-#             # Create Payment
-#             payment = Payment.objects.create(
-#                 user=user,
-#                 method=request.data.get("method", "cash"),
-#                 transaction_id=str(uuid.uuid4())[:12]  # unique transaction id
-#             )
-
-#             # Create Bill
-#             bill = Bill.objects.create(
-#                 user=user,
-#                 edir=edir,
-#                 payment=payment,
-#                 is_paid=True,
-#                 month=month,
-#                 amount=edir.monthly_fee,
-#             )
-
-#         return Response({
-#             "payment": PaymentSerializer(payment).data,
-#             "bill": BillSerializer(bill).data
-#         }, status=status.HTTP_201_CREATED)
-
-#     except Exception as e:
-#         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def user_bills(request, edir_id):
-#     user = request.user
-#     edir = Edir.objects.get(id=edir_id)
-#     bills = Bill.objects.filter(user=user, edir=edir).order_by("-created_at")
-#     serializer = BillSerializer(bills, many=True)
-#     return Response(serializer.data)
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def user_payments(request, edir_id):
-#     user = request.user
-#     # edir = None
-#     try:
-#         edir = Edir.objects.get(id=edir_id)
-#     except Edir.DoesNotExist:
-#         return Response({"detail": "Edir not found."}, status=status.HTTP_404_NOT_FOUND)
-#     # Group bills by payment id
-#     payments = (
-#         Bill.objects.filter(user=user, edir = edir)
-#         .values(
-#             "payment_id",
-#             "payment__method",
-#             "payment__paid_at",
-#             "payment__reason",
-#             "transaction_type",
-#         )
-#         .annotate(
-#             number_of_months=Count("month", distinct=True),
-#             total_amount=Sum("amount"),
-#         )
-#         .order_by("-payment__paid_at")
-#     )
-
-    # return Response(payments)
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def get_user_payments(request, user_id, edir_id):
-#     try:
-#         payments = (
-#             FeeAssignment.objects.filter(
-#                 user_id=user_id,
-#                 fee__edir_id=edir_id,
-#                 Trx_ref__isnull=False,
-#                 payment_status="Paid",
-#             )
-#             .values("Trx_ref")  
-#             .annotate(
-#                 total_amount=Sum("fee__amount"),
-#                 method=F("method"),   
-#                 paid_date=F("paid_date"), 
-#                 transaction_type=F("fee__transaction_type"),
-#                 user_id=F("user_id"),
-#                 edir_id=F("fee__edir_id"),
-#                 fee_count=Count("fee"),
-#             )
-#             .order_by("-paid_date")
-#         )
-
-#         limit = request.query_params.get("limit")
-#         if limit is not None:
-#             try:
-#                 limit = int(limit)
-#                 payments = payments[:limit]
-#             except ValueError:
-#                 return Response({"error": "Invalid limit"}, status=status.HTTP_400_BAD_REQUEST)
-
-#         return Response(payments, status=status.HTTP_200_OK)
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-# @api_view(["GET"])
-# @permission_classes([IsAuthenticated])
-# def get_user_payments(request, user_id, edir_id):
-#     logger = logging.getLogger("fetch_payment")
-#     try:
-#         payments = (
-#             Transaction.objects.filter(
-#                 feeAssignment__user_id=user_id,
-#                 feeAssignment__fee__edir_id=edir_id,
-#             )
-#             .values(
-#                 "reference",
-#                 "amount",
-#                 "payment_method",
-#                 "created_at",
-#                 "transaction_type",
-#                 "payment_status",
-#             )
-#             .annotate(
-#                 fee_count=Count("feeAssignment", distinct=True)
-#             )
-#             .order_by("-created_at")
-#             .distinct()
-#         )
-
-#         limit = request.query_params.get("limit")
-#         if limit:
-#             payments = payments[:int(limit)]
-
-#         return Response(payments, status=status.HTTP_200_OK)
-
-#     except Exception as e:
-#         logger.exception(
-#             f"Fetch Recent Payment Transaction list failed | requested by={request.user} | user_id={user_id} | edir_id={edir_id} | payments={payments} error={str(e)}"
-#         )
-#         return Response(
-#             {"error": "Failed to fetch payments"},
-#             status=status.HTTP_400_BAD_REQUEST,
-#         )
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_user_payments(request, user_id):
@@ -3539,7 +3347,7 @@ def get_user_payments(request, user_id):
         current_user = EdirUser.objects.get(id=user_id)
         payments = (
             Transaction.objects.filter(
-                feeassignment_trx__user=current_user,
+                user=current_user,
                 payment_status__in=["Paid","PAID"],
             )
             .values(
@@ -3550,33 +3358,50 @@ def get_user_payments(request, user_id):
                 "transaction_type",
                 "payment_status",
             )
-            # .filter(
-            #     ~Q(payment_status__in=["Paid", "PAID"]) 
-            # )
             .annotate(
                 fee_count=Count("feeassignment_trx", distinct=True)
             )
             .order_by("-created_at")
-            .distinct()
         )
 
         limit = request.query_params.get("limit")
         if limit:
             payments = payments[:int(limit)]
 
-        payment_request = TransactionChangeRequest.objects.filter(edir=current_user.edir, user= current_user, status="PENDING")
-        paymentRequestSerializer = PaymentChangeRequestSerializer(payment_request, many=True, context={'request': request})
-
-        return Response({"payments": payments, "payment_requests": paymentRequestSerializer.data}, status=status.HTTP_200_OK)
+        return Response(payments, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.exception(
             f"Fetch Recent Payment Transaction list failed | "
             f"requested by={request.user} | user_id={user_id} | error={str(e)}"
         )
-
         return Response(
             {"error": "Failed to fetch payments"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_payment_requests(request, user_id):
+    logger = logging.getLogger("fetch_payment_requests")
+    try:
+        current_user = EdirUser.objects.get(id=user_id)
+        payment_request = TransactionChangeRequest.objects.filter(edir=current_user.edir, 
+                                                                  user= current_user, 
+                                                                  status="PENDING")
+        serializer = PaymentChangeRequestSerializer(payment_request, 
+                                                    many=True, 
+                                                    context={'request': request})
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.exception(
+            f"Fetch Recent Payment request list failed | "
+            f"requested by={request.user} | user_id={user_id} | error={str(e)}"
+        )
+        return Response(
+            {"error": "Failed to fetch payment requests"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -5614,14 +5439,14 @@ def admin_pay_fees(request, edir_id):
                 status="Active",
                 # transaction__isnull=True
             ).first()
-            fee_assignment.transaction_change_request = trx_request
-            fee_assignment.save()
 
             if fee_assignment:
                 FeeAssignmentTrxChangeRequest.objects.create(
                     fee_assignment=fee_assignment,
                     trx_change_request=trx_request,
                 )
+                fee_assignment.transaction_change_request = trx_request
+                fee_assignment.save()
         fee_ids = [f["id"] for f in fees_data] if isinstance(fees_data, str) else fees_data
         
         for fee_id in fee_ids:
@@ -5762,14 +5587,14 @@ def pay_fees(request, edir_id):
                 status="Active",
                 # transaction__isnull=True
             ).first()
-            fee_assignment.transaction_change_request = trx_request
-            fee_assignment.save()
 
             if fee_assignment:
                 FeeAssignmentTrxChangeRequest.objects.create(
                     fee_assignment=fee_assignment,
                     trx_change_request=trx_request,
                 )
+                fee_assignment.transaction_change_request = trx_request
+                fee_assignment.save()
 
         return Response({'message': 'transfer trx added by user'}, status=status.HTTP_201_CREATED)
 
@@ -5837,14 +5662,14 @@ def update_pay_fees(request, edir_id):
                 status="Active",
                 # transaction__isnull=True
             ).first()
-            fee_assignment.transaction_change_request = trx_request
-            fee_assignment.save()
 
             if fee_assignment:
                 FeeAssignmentTrxChangeRequest.objects.create(
                     fee_assignment=fee_assignment,
                     trx_change_request=trx_request,
                 )
+                fee_assignment.transaction_change_request = trx_request
+                fee_assignment.save()
 
         return Response({'message': 'transfer trx updated by user'}, status=status.HTTP_201_CREATED)
     except Edir.DoesNotExist:
@@ -5871,8 +5696,8 @@ def disable_payment(request, ref):
         trx = (
             Transaction.objects
             .filter(reference=ref)
-            .select_related("bank")
-            .prefetch_related("feeassignment_trx__fee")   # ✅ correct relation
+            .select_related("deposit__bank")
+            .prefetch_related("feeassignment_trx__fee")   
             .first()
         )
 
@@ -5899,13 +5724,14 @@ def disable_payment(request, ref):
                 str(a.fee.id)
                 for a in trx.feeassignment_trx.all()   
             ],
-            "bank": trx.bank.id if trx.bank else None,
+            "bank": trx.deposit.bank.id if trx.deposit and trx.deposit.bank else None,
             "total_amount": trx.amount,
             "method": trx.payment_method,
         }
 
         trx_request = TransactionChangeRequest.objects.create(
             trx=trx,
+            prev_trx=trx,
             user=trx.user,
             edir=trx.edir,
             action="DISABLE",
@@ -5913,7 +5739,7 @@ def disable_payment(request, ref):
             new_value= request.data,
             maker=maker,
             status="PENDING",
-            image=trx.image,
+            image=trx.deposit.image if trx.deposit else None,
         )
         logger.info(
                 f"Payment disable request was recorded successfully it waits approval | new value={model_to_json(trx, exclude=['updated_date'])} | old value={model_to_json(trx, exclude=['updated_date'])} | requested by={request.user}"
@@ -5933,12 +5759,8 @@ def disable_payment(request, ref):
                     fee_assignment=fee_assignment,
                     trx_change_request=trx_request,
                 )
-
-        # bank = Bank.objects.get(id=bank_id)
-        
-        # bank.status = "Not Active"
-        # bank.updated_date = timezone.now()
-        # bank.save()
+                fee_assignment.transaction_change_request = trx_request
+                fee_assignment.save()
         return JsonResponse({
             "message": "Payment deactivation request recorded successfully",
             "trx_id": trx.id,
@@ -5965,11 +5787,10 @@ def disable_payment(request, ref):
 @permission_classes([IsAuthenticated])
 def approve_payments(request, id):
     logger = logging.getLogger("approve_payment")
-    
     trx = None
     try:
         change = TransactionChangeRequest.objects.get(id=id)
-        prev_trx = change.trx
+        prev_trx = change.prev_trx
         new = change.new_value
         old_value = change.old_value
         edir = change.edir
@@ -5998,17 +5819,24 @@ def approve_payments(request, id):
             else:
                 old_fee_ids = old_fees_data
 
+            # remove transaction data from fee assignments
             for fee_id in old_fee_ids:
                 fee_assign = FeeAssignment.objects.get(fee_id=fee_id, user = change.user)
                 fee_assign.updated_date = timezone.now()
                 fee_assign.transaction = None
                 fee_assign.save() 
-
+            # mark transaction as disabled
             if prev_trx:
                 prev_trx.payment_status = "Disabled"
                 prev_trx.updated_at = timezone.now()
                 prev_trx.save()
-
+            # mark deposit as reversed if payment method was transfer
+            if prev_trx and prev_trx.deposit and method == "TRANSFER":
+                deposit = prev_trx.deposit 
+                deposit.payment_status = "Disabled"
+                deposit.updated_at = timezone.now()
+                deposit.save()
+            # update bank amount
             if bank_id:
                 bank = Bank.objects.get(id=bank_id)
                 bank.amount = bank.amount - prev_trx.amount if prev_trx else bank.amount
@@ -6036,8 +5864,8 @@ def approve_payments(request, id):
             bank = None
             if bank_id and str(bank_id).isdigit():
                 bank = Bank.objects.filter(id=int(bank_id)).first()
-            
-            if bank and method == "transfer":
+            # create deposit if method is transfer
+            if bank and method == "TRANSFER":
                 deposit = Deposit.objects.create(
                     transaction_type="PAYMENT",
                     payment_method=method,
@@ -6045,9 +5873,10 @@ def approve_payments(request, id):
                     image=image,
                     user=checker,
                 )
+            # reuse deposit if method is cash and previous trx has deposit
             if prev_trx and method == "CASH":
                 deposit = prev_trx.deposit if prev_trx else None
-            # ✅ create ONE transaction
+            # create transaction
             trx = Transaction.objects.create(
                 transaction_type="PAYMENT",
                 amount=total_amount,
@@ -6064,23 +5893,30 @@ def approve_payments(request, id):
                     old_fee_ids = json.loads(old_fees_data)
                 else:
                     old_fee_ids = old_fees_data
-                
+                # remove transaction data from old fee assignments
                 for fee_id in old_fee_ids:
                     fee_assign = FeeAssignment.objects.get(fee_id=fee_id, user = change.user)
                     fee_assign.updated_date = timezone.now()
                     fee_assign.transaction = None
                     fee_assign.save() 
-
+                # add transaction data to new fee assignments
                 for fee_id in fee_ids:
                     fee_assign = FeeAssignment.objects.get(fee_id=fee_id, user = change.user)
                     fee_assign.updated_date = timezone.now()
                     fee_assign.transaction = trx
                     fee_assign.save() 
+                # mark previous transaction as reversed
                 if prev_trx:
-                    prev_trx.payment_status = "Modified"
+                    prev_trx.payment_status = "REVERSED"
                     prev_trx.updated_at = timezone.now()
                     prev_trx.save()
-
+                # mark previous deposit as reversed if payment method was transfer
+                if prev_trx and prev_trx.deposit and method == "TRANSFER":
+                    deposit = prev_trx.deposit 
+                    deposit.payment_status = "REVERSED"
+                    deposit.updated_at = timezone.now()
+                    deposit.save()
+                # update bank amount
                 if bank:
                     # bank = Bank.objects.get(id=bank_id)
                     bank.amount = bank.amount - prev_trx.amount + total_amount if prev_trx else bank.amount + total_amount
@@ -6141,7 +5977,6 @@ def approve_payments(request, id):
             {"error": "Internal server error"},
             status=500,
         )
-
 
 @csrf_exempt
 @api_view(['PUT', 'PATCH'])
@@ -6271,18 +6106,37 @@ def remove_payment(request, trx_ref):
 
     return Response({"updated_count": updated_count}, status=status.HTTP_200_OK)
 
+#change password
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def change_password(request):
-    serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    user = request.user
-    user.set_password(serializer.validated_data['new_password'])
-    user.save()
+        user = request.user
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+        audit_log(
+                action="CHANGE_PASSWORD",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "phone_number":user.phone_number,
+                    "user_id": user.id
+                },
+            )
+        return Response({'detail': 'Password changed successfully'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        audit_log(
+            action="CHANGE_PASSWORD",
+            request=request,
+            status="FAILED",
+            extra_data={"error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
-    # Optionally: invalidate existing tokens (forces re-login)
-    # Token.objects.filter(user=user).delete()
-
-    return Response({'detail': 'Password changed successfully'}, status=status.HTTP_200_OK)

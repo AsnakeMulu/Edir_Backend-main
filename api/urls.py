@@ -5,52 +5,50 @@ from . import views
 
 urlpatterns = [
     #User and Member related endpoints
-    path('edirs/<int:edir_id>/members/', views.members_list_create, name='members-list-create'), # Members
-    path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'),
-    path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
-    path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'),
+    path('edir/<int:edir_id>/members/', views.members_list, name='members-list-create'), # Members
+    path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'), #Add Fee, Expense and Income
+    # path("edir/<int:edir_id>/members/", views.members_by_edir, name="members-by-edir"),
+    path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'), # New member
     
-    # path('add-existed-user/<int:edir_id>/', views.add_existed_user, name='add-existed-user'), #removed
-    path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'),
-    path('user/register/', views.self_register, name='user-register'),
-    # path("user/<int:user_id>/<int:edir_id>/deactivate/", views.deactivate_member, name="deactivate-member"),
-    path("member/disable/<int:member_id>/", views.deactivate_member, name="deactivate-member"),
-    path("member/update/<int:member_id>/", views.update_member, name="update-member"),
-    path('approve_member/<int:id>/', views.approve_member, name='approve-member'),
-    path('reject_member/<int:id>/', views.reject_member, name='reject-member'),
-    # path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail'),
-    # path('user/<int:user_id>/', views.user_detail_with_family, name='user-detail_with_family'),
+    path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'), #New Member
+    path('user/register/', views.self_register, name='user-register'), # Registration
+    path("member/update/<int:member_id>/", views.update_member, name="update-member"), # New Member form
+    path("member/disable/<int:member_id>/", views.deactivate_member, name="deactivate-member"), #Member details
+    path('approve_member/<int:id>/', views.approve_member, name='approve-member'), # Member change request
+    path('reject_member/<int:id>/', views.reject_member, name='reject-member'), # Member change request
     
-    path('user/<int:user_id>/', views.user_detail, name='user-detail'),
-    path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'),
-    path('member/<int:user_id>/', views.member_detail, name='member-detail'),
-    path('member/<int:user_id>/<int:edir_id>/', views.member_detail, name='member-detail-with-edir'), # Member detail
-    path('set-password/<uidb64>/<token>/', views.set_password, name='set-password'),
+    path('user/<int:user_id>/', views.user_detail, name='user-detail'), # change password and user context
+    path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'), # change password and user context
+    path('member_details/<int:user_id>/', views.member_details, name='member-details'), #member details
+    # path('member/<int:user_id>/', views.member_detail, name='member-detail'),
+    # path('member/<int:user_id>/<int:edir_id>/', views.member_detail, name='member-detail-with-edir'), 
+    # path('set-password/<uidb64>/<token>/', views.set_password, name='set-password'),
     
-    path('check_user_phone/<int:phone_number>/', views.check_user_phone, name='check_user_phone'),
-    path('check_user_phoneNumber/<int:phone_number>/', views.check_user_phoneNumber, name='check_user_phoneNumber'), #will be removed
-    path('check_phone/', views.check_phone, name='check_phone'),
-    path('set_new_password/', views.set_new_password, name='set_new_password'),
-    path('auth/change-password/', views.change_password, name='change-password'),
+    path('check_user_phone/<int:phone_number>/', views.check_user_phone, name='check_user_phone'), # login and registration
+    # path('check_user_phoneNumber/<int:phone_number>/', views.check_user_phoneNumber, name='check_user_phoneNumber'), #will be removed
+    path('check_phone/', views.check_phone, name='check_phone'), # login
+    path('set_new_password/', views.set_new_password, name='set_new_password'), # login
+    path('auth/change-password/', views.change_password, name='change-password'), # change phone number
     
     #Family related endpoints
     path('admin_add_family/<int:user_id>/', views.add_family, name='admin-add-family'),   
     path('family_list/<int:user_id>/', views.user_family_list, name='family-list'), 
-    path('family/<int:user_id>/', views.family_detail, name='family-detail'), 
+    path('family/<int:family_id>/', views.family_detail, name='family-detail'), 
     path("family/deactivate/<int:family_id>/", views.deactivate_family, name="deactivate-family"),
-    path('family/<int:family_id>/delete/', views.delete_family_member, name='delete-family'),
+    # path('family/<int:family_id>/delete/', views.delete_family_member, name='delete-family'),
     path('approve_family/<int:id>/', views.approve_family, name='approve-family'),
     path('reject_family/<int:id>/', views.reject_family, name='reject-family'),
 
     #Bank account related endpoints
     path('add-bank/<int:edir_id>/', views.add_bank, name='add-bank'),   
-    path('bank_list/<int:edir_id>/', views.edir_bank_list, name='bank-list'), 
+    # path('bank_list/<int:edir_id>/', views.edir_bank_list, name='bank-list'), 
     path('active_bank_list/<int:edir_id>/', views.edir_active_bank_list, name='active-bank-list'), 
     path('bank/<int:bank_id>/', views.bank_detail, name='bank-detail'), 
-    path('bank/details/<int:bank_id>/', views.get_bank_details, name='bank-details'),
+    # path('bank/details/<int:bank_id>/', views.get_bank_details, name='bank-details'),
+    path('bank/transactions/<int:bank_id>/', views.get_bank_transactions, name='bank-transactions'),
     path('update_bank/<int:bank_id>/', views.update_bank, name='update-bank'), 
     path("bank/<int:bank_id>/deactivate/", views.deactivate_bank, name="deactivate-bank"),
-    path('bank/<int:bank_id>/delete/', views.delete_bank, name='delete-bank'),
+    # path('bank/<int:bank_id>/delete/', views.delete_bank, name='delete-bank'),
     path('approve_bank/<int:id>/', views.approve_bank, name='approve-bank'),
     path('reject_bank/<int:id>/', views.reject_bank, name='reject-bank'),
 
@@ -112,22 +110,19 @@ urlpatterns = [
 
     #Payment related endpoints
     path("user/payments/<int:user_id>/", views.get_user_payments, name="get_user_payments"), #paymnet list
+    path("user/payment_requests/<int:user_id>/", views.get_user_payment_requests, name="get_user_payment_requests"), #payment request list
     path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"), #payment detial
     path("transaction_details/<int:id>/", views.get_transaction_detail, name="get_transaction_detail"),
+    
     path("admin_pay/fees/<int:edir_id>/", views.admin_pay_fees, name="admin-pay-fees"), #cash
     path("pay/fees/<int:edir_id>/", views.pay_fees, name="pay-fees"),#Transfer
     path("update_pay/fees/<int:edir_id>/", views.update_pay_fees, name="update-pay-fees"), #update payment
     path("disable_payment/<str:ref>/", views.disable_payment, name="disable-payment"),
     path("payment/approve/<int:id>/", views.approve_payments, name="approve-payments"),
     path("payment/reject/<int:id>/", views.reject_payment, name="reject-payments"),
-    path("unpay/fees/", views.unpay_fees, name="unpay-fees"),
-    path("remove/payment/<str:trx_ref>/", views.remove_payment, name="remove_payment"),
 
     path("trx/undeposited/<int:edir_id>/", views.get_undeposited_trxs, name="get-undeposited-trxs"),
     path("deposit/cashes/<int:edir_id>/", views.deposit_payments, name="deposit-cashs"),
-    # path("payment/<int:payment_id>/", views.get_payment_details, name="payment-details"),
-    # path("user/<int:edir_id>/payments/", views.user_payments, name="user_payments"),
-    # path("edir/payments/", views.edir_payments, name="edir-payments"),
     
     #Event related endpoints
     path('add-event/<int:edir_id>/', views.add_event, name='add-event'),   
