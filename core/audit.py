@@ -41,6 +41,8 @@ def audit_log(
     response_data=None,
     extra_data=None,
 ):
+    # if request_data is None:
+    #     request_data = request.data if hasattr(request, "data") else None
 
     payload = {
         "action": action,
@@ -50,6 +52,9 @@ def audit_log(
             "phone_number",
             None,
         ),
+        # "method": request.method,
+        # "path": request.path,
+        # "ip": request.META.get("REMOTE_ADDR"),
         "status": status,
         "request": request_data,
         "response": response_data,

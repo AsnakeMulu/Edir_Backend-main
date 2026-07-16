@@ -12,8 +12,9 @@ urlpatterns = [
     path('user/register/', views.self_register, name='user-register'), # Registration
     path("member/update/<int:member_id>/", views.update_member, name="update-member"), # New Member form
     path("member/disable/<int:member_id>/", views.deactivate_member, name="deactivate-member"), #Member details
-    path('approve_member/<int:id>/', views.approve_member, name='approve-member'), # Member change request
-    path('reject_member/<int:id>/', views.reject_member, name='reject-member'), # Member change request
+    path('approve_member/<int:id>/', views.approve_member, name='approve-member'), # Member approve request
+    path('reject_member/<int:id>/', views.reject_member, name='reject-member'), # Member reject request
+    path('member/cancel/<int:id>/', views.cancel_member, name='cancel-member'), # Member cancel request
     
     path('user/<int:user_id>/', views.user_detail, name='user-detail'), # change password and user context
     path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'), # change password and user context
@@ -30,6 +31,7 @@ urlpatterns = [
     path("family/deactivate/<int:family_id>/", views.deactivate_family, name="deactivate-family"),
     path('approve_family/<int:id>/', views.approve_family, name='approve-family'),
     path('reject_family/<int:id>/', views.reject_family, name='reject-family'),
+    path('family/cancel/<int:id>/', views.cancel_family, name='cancel-family'),
 
     #Edir related endpoints
     path("edir/add/", views.add_edir, name="add_edir"), #New Edir
@@ -47,6 +49,7 @@ urlpatterns = [
     path("edir/update/<int:edir_id>/", views.update_edir, name="update-edir"),
     path("edir/approve/<int:id>/", views.approve_edir, name="approve_edir_edit"),
     path("edir/reject/<int:id>/", views.reject_edir, name="reject_edir_edit"),
+    path("edir/cancel/<int:id>/", views.cancel_edir, name="cancel-edir"),
     path("edir/<int:pk>/update_meeting/", views.update_meeting_date, name="update-meeting-date"),
 
     #Bank account related endpoints
@@ -58,6 +61,7 @@ urlpatterns = [
     path("bank/<int:bank_id>/deactivate/", views.deactivate_bank, name="deactivate-bank"),
     path('approve_bank/<int:id>/', views.approve_bank, name='approve-bank'),
     path('reject_bank/<int:id>/', views.reject_bank, name='reject-bank'),
+    path("bank/cancel/<int:id>/", views.cancel_bank, name="cancel-bank"),
 
     #Expense related endpoint
     path("edir/expenses/<int:edir_id>/", views.get_edir_expenses, name="get-expenses"),
@@ -67,6 +71,7 @@ urlpatterns = [
     path("expense_disable/<int:fee_id>/", views.disable_expense, name="disable-expense"),
     path('approve_expense/<int:id>/', views.approve_expense, name='approve-expense'),
     path('reject_expense/<int:id>/', views.reject_expense, name='reject-expense'),
+    path('expense/cancel/<int:id>/', views.cancel_expense, name='cancel-expense'),
 
     #Income related endpoints
     path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
@@ -76,6 +81,7 @@ urlpatterns = [
     path("income_disable/<int:fee_id>/", views.disable_income, name="disable-income"),
     path('approve_income/<int:id>/', views.approve_income, name='approve-income'),
     path('reject_income/<int:id>/', views.reject_income, name='reject-income'),
+    path('income/cancel/<int:id>/', views.cancel_income, name='cancel-income'),
 
     #Fee related endpoints
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
@@ -85,6 +91,7 @@ urlpatterns = [
     path("fee_disable/<int:fee_id>/", views.disable_fee, name="disable-fee"),
     path('approve_fee/<int:id>/', views.approve_fee, name='approve-fee'),
     path('reject_fee/<int:id>/', views.reject_fee, name='reject-fee'),
+    path('fee/cancel/<int:id>/', views.cancel_fee, name='cancel-fee'),
     path("fee_request/detail/<int:id>/", views.get_fee_request_detail, name="get-fee-request-detail"),
 
     #Payment related endpoints
@@ -103,9 +110,10 @@ urlpatterns = [
     path("disable_payment/<str:ref>/", views.disable_payment, name="disable-payment"),
     path("payment/approve/<int:id>/", views.approve_payments, name="approve-payments"),
     path("payment/reject/<int:id>/", views.reject_payment, name="reject-payments"),
+    path("payment/cancel/<int:id>/", views.cancel_payment, name="cancel-payments"),
     
     #Event related endpoints
-    path('add-event/<int:edir_id>/', views.add_event, name='add-event'),   
+    path('add-event/<int:edir_id>/', views.add_event, name='add-event'),
     path('event_list/<int:edir_id>/', views.edir_event_list, name='event-list'),
     path('popular_event/', views.popular_event_list, name='popular-event'),
     path('event/<int:event_id>/', views.event_detail, name='event-detail'), 

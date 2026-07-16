@@ -15,6 +15,7 @@ from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserCh
 from django.utils import timezone
 from django.db import transaction
 from decimal import Decimal
+import traceback
 import uuid
 import json
 from django.views.decorators.csrf import csrf_exempt
@@ -156,12 +157,12 @@ def member_details(request, user_id):
 @permission_classes([IsAuthenticated])
 def update_member(request, member_id):
     try:
-        member = EdirUser.objects.get(id=member_id)
+        member = EdirUser.objects.select_related("edir").get(id=member_id)
         maker = EdirUser.objects.filter(
             user=request.user,
             edir=member.edir,
             status="Active"
-        ).only("id").first()
+        ).first()
         EdirUserChangeRequest.objects.create(
             edir_user=member,
             edir=member.edir,
@@ -175,9 +176,10 @@ def update_member(request, member_id):
             action="UPDATE_MEMBER_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data= request.data,
             extra_data={
-                "user_id": member.id,
-                "maker_id": maker.id,
+                "user_id": member_id,
+                "maker": maker,
             },
         )
         return Response({"message": "Update member request sent for approval successfully"}, status=status.HTTP_201_CREATED)
@@ -188,9 +190,11 @@ def update_member(request, member_id):
             action="UPDATE_MEMBER_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": member_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -543,7 +547,7 @@ def reject_member (request, id):
         change.comment= reason
         change.save()      
         audit_log(
-            action="APPROVE_DEACTIVATE_MEMBER",
+            action="REJECT_MEMBER",
             request=request,
             status="SUCCESS",
             extra_data={
@@ -559,12 +563,64 @@ def reject_member (request, id):
         return JsonResponse({"error": "The change request is not found "}, status=404)
     except Exception as e:
         audit_log(
-            action="REJECT_MEMBER_REQUEST",
+            action="REJECT_MEMBER",
             request=request,
             status="FAILED",
             extra_data={"request_id": id,
                         "cheker_user_id": request.user.id,
                         "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_member (request, id):
+    try:
+        change = EdirUserChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment= reason
+        change.save()      
+        audit_log(
+            action="CANCEL_MEMBER",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_id": checker.id
+            },
+        )
+        return JsonResponse({"message": "Member request cancelled successfully"}, status=200)
+    except EdirUserChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "The change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="REJECT_MEMBER",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "cheker_user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1083,34 +1139,83 @@ def reject_family(request, id):
             action="REJECT_FAMILY_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "family_request_id": id,
                 "reason": reason,
                 "checker_id": checker.id
             },
         )
-        return JsonResponse({
-            "message": "Family request rejected successfully",
-            "family": change.new_value,
-            "status": "Rejected",
-            "updated_date": change.approved_at,
-        }, status=200)
+        return JsonResponse({"message": "Family request rejected successfully",}, status=200)
     except FamilyChangeRequest.DoesNotExist:
         return JsonResponse({"error": "Family change request is not found "}, status=404)
     except Exception as e:
         audit_log(
-            action="REJECT_FAMILY_REQUEST",
+            action="REJECT_FAMILY",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "checker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e), 
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-    
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_family(request, id):
+    try:
+        change = FamilyChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir_user.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment= reason
+        change.save()
+        audit_log(
+            action="CANCEL_FAMILY",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "family_request_id": id,
+                "checker_id": checker.id
+            },
+        )
+        return JsonResponse({"message": "Family request cancelled successfully",}, status=200)
+    except FamilyChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Family change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_FAMILY",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "checker_user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def add_edir(request):
@@ -1734,7 +1839,7 @@ def reject_edir(request, id):
         change.approved_at = timezone.now()
         change.save()
         audit_log(
-            action="APPROVE_DISABLE_EDIR",
+            action="REJECT_EDIR",
             request=request,
             status="SUCCESS",
             extra_data={
@@ -1742,8 +1847,7 @@ def reject_edir(request, id):
                 "checker_user_id": checker.id
             }
         )
-        return Response(
-            {"message": "Rejected successfully"},status=status.HTTP_200_OK)
+        return Response({"message": "Rejected successfully"},status=status.HTTP_200_OK)
     except EdirChangeRequest.DoesNotExist:
         return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -1751,6 +1855,7 @@ def reject_edir(request, id):
             action="REJECT_EDIR_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
                         "error": str(e)}
@@ -1759,6 +1864,62 @@ def reject_edir(request, id):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def cancel_edir(request, id):
+    try:
+        change = EdirChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        edir = change.edir
+        change.status = "CANCELLED"
+        change.checker = checker
+        # change.comment = reason
+        change.approved_at = timezone.now()
+        change.save()
+        audit_log(
+            action="CANCEL_EDIR",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return Response(
+            {"message": "Edir request Cancelled successfully"},status=status.HTTP_200_OK)
+    except EdirChangeRequest.DoesNotExist:
+        return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_EDIR_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()
+                        }
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
@@ -2153,6 +2314,61 @@ def reject_bank (request, id):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_bank (request, id):
+    try:
+        change = BankChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        edir = change.edir
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir,
+            status="Active"
+        ).only("id").first()
+
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment = reason
+        change.save()
+        audit_log(
+            action="CANCEL_BANK_REQUEST",
+            request=request,
+            status="SUCCESS",
+            request_data = request.data,
+            extra_data={
+                "bank_request_id": id,
+                "checker_id": checker.id
+            },
+        )
+        return JsonResponse({"message": "Bank account request cancelled successfully"}, status=200)
+    except BankChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Bank is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_BANK_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data = request.data,
+            extra_data={"request_id": id,
+                        "checker_user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -2614,12 +2830,63 @@ def reject_expense (request, id):
         return JsonResponse({"error": "Expense change request is not found "}, status=404)
     except Exception as e:
         audit_log(
-            action="REJECT_EXPENSE_REQUEST",
+            action="REJECT_EXPENSE",
             request=request,
             status="FAILED",
             extra_data={"request_id": id,
                         "user_id": request.user.id,
                         "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_expense (request, id):
+    try:
+        change = ExpenseChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment= reason
+        change.save()
+        audit_log(
+            action="CANCEL_EXPENSE",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return JsonResponse({"message": "Expense request cancelled successfully"}, status=200)
+    except ExpenseChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Expense change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_EXPENSE",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3091,6 +3358,57 @@ def reject_income (request, id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_income (request, id):
+    try:
+        change = IncomeChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment= reason
+        change.save()
+        audit_log(
+                action="CANCEL_INCOME",
+                request=request,
+                status="SUCCESS",
+                request_data=request.data,
+                extra_data={
+                    "request_id": id,
+                    "checker_user_id": checker.id
+                }
+            )
+        return JsonResponse({"message": "Income request cancelled successfully",}, status=200)
+    except IncomeChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Income change request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_INCOME",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"fee_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -3201,7 +3519,7 @@ def create_fee(request, edir_id):
                     {"month_year": "This monthly fee already exists."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )        
-        request = FeeChangeRequest.objects.create(
+        fee_request = FeeChangeRequest.objects.create(
             edir=edir,
             action="CREATE",
             new_value=request.data,
@@ -3212,9 +3530,10 @@ def create_fee(request, edir_id):
             action="CREATE_FEE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
-                "request_id": request.id,
+                "request_id": fee_request.id,
                 "maker_user_id": maker.id
             }
         )
@@ -3226,9 +3545,11 @@ def create_fee(request, edir_id):
             action="CREATE_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3255,7 +3576,7 @@ def update_fee(request, fee_id):
         assigned_users = FeeAssignment.objects.filter(fee=fee).values_list("user_id", flat=True)
 
         old_value["users"] = list(assigned_users)
-        request = FeeChangeRequest.objects.create(
+        fee_request = FeeChangeRequest.objects.create(
             fee=fee,
             edir=fee.edir,
             action="UPDATE",
@@ -3268,10 +3589,11 @@ def update_fee(request, fee_id):
             action="UPDATE_FEE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": fee.edir.id,
                 "fee_id": fee_id,
-                "request_id": request.id,
+                "request_id": fee_request.id,
                 "maker_user_id": maker.id
             }
         )
@@ -3283,9 +3605,11 @@ def update_fee(request, fee_id):
             action="UPDATE_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3566,6 +3890,57 @@ def reject_fee (request, id):
             extra_data={"request_id": id,
                         "user_id": request.user.id,
                         "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_fee (request, id):
+    try:
+        change = FeeChangeRequest.objects.get(id=id)
+        # reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        # change.comment= reason
+        change.save()
+        audit_log(
+            action="CANCEL_FEE",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return JsonResponse({"message": "Fee request cancelled successfully"}, status=200)
+    except FeeChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Fee request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_FEE",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -4476,6 +4851,56 @@ def reject_payment (request, id):
                         "request_id": id,
                         "user_id": request.user.id,
                         "error": str(e)}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@csrf_exempt
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def cancel_payment (request, id):
+    try:
+        change = TransactionChangeRequest.objects.get(id=id)
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        change.status = "Cancelled"
+        change.approved_at = timezone.now()
+        change.checker = checker
+        change.save()
+        audit_log(
+            action="CANCEL_PAYMENT",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return JsonResponse({"message": "Payment request cancelled successfully"}, status=200)
+    except TransactionChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Payment request is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_PAYMENT",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={
+                        "request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),}
         )
         return Response(
             {'error': 'Internal server error'},
