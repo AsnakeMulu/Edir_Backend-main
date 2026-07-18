@@ -8,10 +8,11 @@ from django.contrib.auth.hashers import make_password
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
-from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
+from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
 from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest
+from .pagination import AmbaPagination
 from django.utils import timezone
 from django.db import transaction
 from decimal import Decimal
@@ -32,22 +33,18 @@ User = get_user_model()
 def members_list(request, edir_id=None):
     try:
         edir = Edir.objects.get(id=edir_id)
-        edirSerializer = EdirDetailSerializer(edir)
         
         edir_users = EdirUser.objects.filter(
             edir=edir,
             status="Active"
         )
-        member_serializer = SimpleEdirUserSerializer(edir_users, many=True)
-        
-        userRequest = EdirUserChangeRequest.objects.filter(edir=edir, status="PENDING")
-        userRequestSerializer = EdirUserChangeRequestSerializer(userRequest, many=True)
+        # serializer = SimpleEdirUserSerializer(edir_users, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(edir_users, request)
+        serializer = SimpleEdirUserSerializer(page, many=True)
 
-        serializer = Response({"members":member_serializer.data, 
-                                "member_requests": userRequestSerializer.data, 
-                                "edir": edirSerializer.data})
-        
-        return Response(serializer.data, status=status.HTTP_200_OK) 
+        return paginator.get_paginated_response(serializer.data)
+        # return Response(serializer.data, status=status.HTTP_200_OK) 
 
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -58,7 +55,34 @@ def members_list(request, edir_id=None):
             action="FETCH_MEMBER_LISTS",
             request=request,
             status="FAILED",
-            extra_data={"edir_id": edir_id, "error": str(e)}
+            request_data=request.data,
+            extra_data={"edir_id": edir_id, "error": str(e), "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])  
+def member_requests(request, edir_id=None):
+    try:
+        edir = Edir.objects.get(id=edir_id)
+        
+        userRequest = EdirUserChangeRequest.objects.filter(edir=edir, status="PENDING")
+        serializer = EdirUserChangeRequestSerializer(userRequest, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK) 
+
+    except Edir.DoesNotExist:
+        return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FETCH_MEMBER_LISTS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id, "error": str(e), "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -881,32 +905,59 @@ def user_family_list(request, user_id):
     try:
         user = EdirUser.objects.get(id=user_id)
         family = Family.objects.filter(user=user, status="Active")
-        family_serializer = FamilyWithUserSerializer(family, many=True)
+        # serializer = FamilyWithUserSerializer(family, many=True)
         
-        family_request = FamilyChangeRequest.objects.filter(edir_user=user, status="PENDING")
-        userRequestSerializer = FamilyChangeRequestSerializer(family_request, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(family, request)
+        serializer = FamilyWithUserSerializer(page, many=True)
 
-        serializer = Response({"families":family_serializer.data, "family_requests": userRequestSerializer.data})
-
-        return Response(serializer.data)
-    except User.DoesNotExist:
-        return Response({"detail": "Partner not added"}, status=status.HTTP_404_NOT_FOUND)
-    except Family.DoesNotExist:
-        return Response({"detail": "Family not added"}, status=status.HTTP_404_NOT_FOUND)
+        return paginator.get_paginated_response(serializer.data)
+        # return Response(serializer.data)
+    except EdirUser.DoesNotExist:
+        return Response({"detail": "Member not added"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FAMILY_LIST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": user_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_family_requests(request, user_id):
+    try:
+        user = EdirUser.objects.get(id=user_id)
+        
+        family_request = FamilyChangeRequest.objects.filter(edir_user=user, status="PENDING")
+        serializer = FamilyChangeRequestSerializer(family_request, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except User.DoesNotExist:
+        return Response({"detail": "Partner not added"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FAMILY_LIST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"user_id": user_id,
+                        "maker_user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
@@ -2034,9 +2085,13 @@ def get_bank_transactions(request, bank_id):
             .annotate(total_amount=Sum("transactions__amount"))
             .order_by("-created_at")
         )
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(deposits, request)
+        serializer = SimpleDepositSerializer(page, many=True)
 
-        serializer = SimpleDepositSerializer(deposits, many=True)
-        return Response(serializer.data, status=200)
+        return paginator.get_paginated_response(serializer.data)
+        # serializer = SimpleDepositSerializer(deposits, many=True)
+        # return Response(serializer.data, status=200)
     except Bank.DoesNotExist:
         return Response({'error': 'Bank not found'},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -2044,9 +2099,11 @@ def get_bank_transactions(request, bank_id):
             action="FETCH_BANK_TRANSACTIONS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"bank_id": bank_id,
                         "fetcher_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Bank not found or failed to fetch bank transactions'},
@@ -2369,7 +2426,6 @@ def cancel_bank (request, id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_edir_expenses(request, edir_id):
@@ -2379,27 +2435,52 @@ def get_edir_expenses(request, edir_id):
                 edir_id=edir_id,
                 status="Active"
             )
-        expense_serializer = ExpenseDetailSerializer(expenses, many=True)
-        
-        expenseRequest = ExpenseChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
-        expenseRequestSerializer = ExpenseChangeRequestSerializer(expenseRequest, many=True)
+        # expense_serializer = ExpenseDetailSerializer(expenses, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(expenses, request)
+        serializer = ExpenseDetailSerializer(page, many=True)
 
-        serializer = Response({"expenses":expense_serializer.data, "expense_requests": expenseRequestSerializer.data})
-        return Response(serializer.data, status=200)
+        return paginator.get_paginated_response(serializer.data)
     except Exception as e:
         audit_log(
             action="FETCH_EDIR_EXPENSES",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch expenses list"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_edir_expense_requests(request, edir_id):
+    try:
+        expense_request = ExpenseChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
+        serializer = ExpenseChangeRequestSerializer(expense_request, many=True)
+
+        return Response(serializer.data, status=200)
+    except Exception as e:
+        audit_log(
+            action="FETCH_EXPENSE_REQUESTS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to fetch expenses list"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_expense_detail(request, fee_id):
@@ -2895,15 +2976,40 @@ def cancel_expense (request, id):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def get_deposits_with_transactions(request, edir_id):
+def get_edir_incomes(request, edir_id):
     try:
         incomes = Fee.objects.filter(
                 fee_type="Income",
                 edir_id=edir_id,
                 status="Active"  
             )
-        income_serializer = FeeDetailSerializer(incomes, many=True)
-        
+        # income_serializer = FeeDetailSerializer(incomes, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(incomes, request)
+        serializer = FeeDetailSerializer(page, many=True)
+
+        return paginator.get_paginated_response(serializer.data)
+        # return Response({income_serializer.data}, status=200)
+    except Exception as e:
+        audit_log(
+            action="FETCH_INCOMES",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to fetch daily edir incomes list"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_income_requests_and_undeposited(request, edir_id):
+    try:
         undeposited_trxs = (
             Transaction.objects.filter(
                 payment_method="CASH",
@@ -2917,15 +3023,17 @@ def get_deposits_with_transactions(request, edir_id):
         
         incomeRequest = IncomeChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
         income_request_serializer = ExpenseChangeRequestSerializer(incomeRequest, many=True)
-        return Response({"incomes": income_serializer.data, "undeposited": serializer.data, "income_requests": income_request_serializer.data}, status=200)
+        return Response({"undeposited": serializer.data, "income_requests": income_request_serializer.data}, status=200)
     except Exception as e:
         audit_log(
             action="GET_DEPOSIT_TRANSACTION",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch daily edir incomes list"},
@@ -3420,29 +3528,55 @@ def get_edir_fees(request, edir_id):
                 status="Active",
                 fee_type="Fee",
             )
-        fee_serializer = FeeDetailSerializer(fees, many=True)
         
-        feeRequest = FeeChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
-        feeRequestSerializer = FeeChangeRequestSerializer(feeRequest, many=True)
+        # serializer = FeeDetailSerializer(fees, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(fees, request)
+        serializer = FeeDetailSerializer(page, many=True)
 
-        serializer = Response({"fees":fee_serializer.data, "fee_requests": feeRequestSerializer.data})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return paginator.get_paginated_response(serializer.data)
+        # return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
-    except Fee.DoesNotExist:
-        return Response({"error": "Fee not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_FEES",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch edir fees list"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_edir_fee_requests(request, edir_id):
+    try:
+        feeRequest = FeeChangeRequest.objects.filter(edir_id=edir_id, status="PENDING")
+        serializer = FeeChangeRequestSerializer(feeRequest, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        audit_log(
+            action="FETCH_FEE_REQUESTS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to fetch payment requests"},
             status=status.HTTP_400_BAD_REQUEST,
         )
     
@@ -3976,15 +4110,62 @@ def get_unpaid_fees(request, user_id):
             action="FETCH_UNPAID_FEE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": user_id,
                         "fetcher_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to unpaid fees list"},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_unpaid_fees_paginated(request, user_id):
+    try:
+        user = EdirUser.objects.get(id=user_id)
+        pending_requests = FeeAssignmentTrxChangeRequest.objects.filter(
+            fee_assignment=OuterRef("pk"),
+            trx_change_request__status="PENDING"
+        )
+        unpaid_fees = (
+            FeeAssignment.objects.filter(
+                status="Active",
+                user=user,
+                transaction=None
+            )
+            .annotate(has_pending=Exists(pending_requests))
+            .filter(has_pending=False)
+            .order_by("-id")
+            .select_related("fee")
+        )
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(unpaid_fees, request)
+        serializer = FeeAssignmentSerializer(page, many=True)
+
+        return paginator.get_paginated_response(serializer.data)
+        # serializer = FeeAssignmentSerializer(unpaid_fees, many = True)
+        # return Response(serializer.data, status=status.HTTP_200_OK)
+    except EdirUser.DoesNotExist:
+        return JsonResponse({"error": "User is not found "}, status=404)
+    except Exception as e:
+        audit_log(
+            action="FETCH_UNPAID_FEE_PAGINATED",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"user_id": user_id,
+                        "fetcher_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to unpaid fees list"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_paid_fees(request, ref):
@@ -4025,34 +4206,27 @@ def get_user_payments(request, user_id):
                 user=current_user,
                 payment_status__in=["Paid","PAID"],
             )
-            .values(
-                "reference",
-                "amount",
-                "payment_method",
-                "created_at",
-                "transaction_type",
-                "payment_status",
-            )
             .annotate(
                 fee_count=Count("feeassignment_trx", distinct=True)
             )
             .order_by("-created_at")
         )
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(payments, request)
+        serializer = PaymentHistorySerializer(page, many=True)
 
-        limit = request.query_params.get("limit")
-        if limit:
-            payments = payments[:int(limit)]
-
-        return Response(payments, status=status.HTTP_200_OK)
+        return paginator.get_paginated_response(serializer.data)
 
     except Exception as e:
         audit_log(
             action="FETCH_USER_PAYMENT",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_user_id": user_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch payments"},

@@ -5,7 +5,8 @@ from . import views
 
 urlpatterns = [
     #User and Member related endpoints
-    path('edir/<int:edir_id>/members/', views.members_list, name='members-list-create'), # Members
+    path('edir/<int:edir_id>/members/', views.members_list, name='members-list'), # Members
+    path('edir/<int:edir_id>/member_requests/', views.member_requests, name='member-requests'), # Members
     path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'), #Add Fee, Expense and Income
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'), # New member
     path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'), #New Member
@@ -27,6 +28,7 @@ urlpatterns = [
     #Family related endpoints
     path('admin_add_family/<int:user_id>/', views.add_family, name='admin-add-family'),   
     path('family_list/<int:user_id>/', views.user_family_list, name='family-list'), 
+    path('family_requests/<int:user_id>/', views.user_family_requests, name='family-requests'), 
     path('family/<int:family_id>/', views.family_detail, name='family-detail'), 
     path("family/deactivate/<int:family_id>/", views.deactivate_family, name="deactivate-family"),
     path('approve_family/<int:id>/', views.approve_family, name='approve-family'),
@@ -65,6 +67,7 @@ urlpatterns = [
 
     #Expense related endpoint
     path("edir/expenses/<int:edir_id>/", views.get_edir_expenses, name="get-expenses"),
+    path("expense_requests/<int:edir_id>/", views.get_edir_expense_requests, name="get-edir-expense_requests"),
     path("expense/detail/<int:fee_id>/", views.get_expense_detail, name="get-expense-detail"),
     path("add_expense/<int:edir_id>/", views.add_expense, name="add-expense"),
     path("expense/update/<int:fee_id>/", views.update_expense, name="update-expense"),
@@ -74,7 +77,8 @@ urlpatterns = [
     path('expense/cancel/<int:id>/', views.cancel_expense, name='cancel-expense'),
 
     #Income related endpoints
-    path("edir/incomes/<int:edir_id>/", views.get_deposits_with_transactions, name="get-deposits-with-transactions"),
+    path("edir/incomes/<int:edir_id>/", views.get_edir_incomes, name="get-deposits-with-transactions"),
+    path("edir/income_requests/<int:edir_id>/", views.get_income_requests_and_undeposited, name="get-income-requests-undeposited"),
     path("income/detail/<int:fee_id>/", views.get_income_detail, name="get-income-detail"),
     path("add_income/<int:edir_id>/", views.add_income, name="add-income"),
     path("income/update/<int:fee_id>/", views.update_income, name="update-income"),
@@ -85,6 +89,7 @@ urlpatterns = [
 
     #Fee related endpoints
     path("fees/<int:edir_id>/", views.get_edir_fees, name="get-edir-fees"),
+    path("fee_requests/<int:edir_id>/", views.get_edir_fee_requests, name="get-edir-fee_requests"),
     path("fee/detail/<int:fee_id>/", views.get_fee_detail, name="get-fee-detail"),
     path("fee/create/<int:edir_id>/", views.create_fee, name="create-fees"),
     path("fee/update/<int:fee_id>/", views.update_fee, name="update-fees"),
@@ -100,6 +105,7 @@ urlpatterns = [
     path("payment_details/<str:ref>/", views.get_payment_detail, name="get_payment_detail"), #payment detial
     path("transaction_details/<int:id>/", views.get_deposit_detail, name="get_transaction_detail"),
     path("fees/unpaid/<int:user_id>/", views.get_unpaid_fees, name="get_unpaid_fees"), #unpaid list for add and update paymnet
+    path("fees/unpaid/paginated/<int:user_id>/", views.get_unpaid_fees_paginated, name="get_unpaid_fees_paginated"),
     path("fees/paid/<str:ref>/", views.get_paid_fees, name="get_paid_fees"), 
     path("trx/undeposited/<int:edir_id>/", views.get_undeposited_trxs, name="get-undeposited-trxs"),
     path("deposit/cashes/<int:edir_id>/", views.deposit_payments, name="deposit-cashs"),

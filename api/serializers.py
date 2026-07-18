@@ -881,6 +881,20 @@ class DepositForTransactionSerializer(serializers.ModelSerializer):
             data['image'] = None
         return data
 
+class PaymentHistorySerializer(serializers.ModelSerializer):
+    fee_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = (
+            "reference",
+            "amount",
+            "payment_method",
+            "created_at",
+            "transaction_type",
+            "payment_status",
+            "fee_count",
+        )
 
 # Payment Details
 class TransactionSerializer(serializers.ModelSerializer):
