@@ -9,9 +9,9 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
-from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer
+from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest
+from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, DeviceToken, Notification
 from .pagination import AmbaPagination
 from django.utils import timezone
 from django.db import transaction
@@ -19,11 +19,23 @@ from decimal import Decimal
 import traceback
 import uuid
 import json
+import os
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.forms.models import model_to_dict
 from core.audit import model_to_json, audit_log
 from django.core.serializers.json import DjangoJSONEncoder
+from api.notification_service import create_notification
+import firebase_admin
+from firebase_admin import credentials, messaging
+firebase_key_path = os.path.join(
+    settings.BASE_DIR,
+    "core",
+    "hibret-amba-firebase-adminsdk-fbsvc-cdff8f4067.json"
+)
+cred = credentials.Certificate(firebase_key_path)
+firebase_admin.initialize_app(cred)
 
 User = get_user_model()
 
@@ -38,18 +50,13 @@ def members_list(request, edir_id=None):
             edir=edir,
             status="Active"
         )
-        # serializer = SimpleEdirUserSerializer(edir_users, many=True)
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(edir_users, request)
         serializer = SimpleEdirUserSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-        # return Response(serializer.data, status=status.HTTP_200_OK) 
-
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_MEMBER_LISTS",
@@ -78,11 +85,37 @@ def member_requests(request, edir_id=None):
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
-            action="FETCH_MEMBER_LISTS",
+            action="FETCH_MEMBER_REQUESTS",
             request=request,
             status="FAILED",
             request_data=request.data,
             extra_data={"edir_id": edir_id, "error": str(e), "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])  
+def member_request(request, user_id=None):
+    try:
+        edir_user = EdirUser.objects.get(id=user_id)
+        
+        userRequest = EdirUserChangeRequest.objects.filter(edir_user=edir_user, status="PENDING")
+        serializer = EdirUserChangeRequestSerializer(userRequest, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK) 
+
+    except EdirUser.DoesNotExist:
+        return Response({"error": "Edir user not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="FETCH_MEMBER_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"user_id": user_id, "error": str(e), "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -103,14 +136,13 @@ def active_members_list(request, edir_id=None):
         return Response(serializer.data, status=status.HTTP_200_OK) 
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_ACTIVE_MEMBER_LISTS",
             request=request,
             status="FAILED",
-            extra_data={"edir_id": edir_id, "error": str(e)}
+            request_data=request.data,
+            extra_data={"edir_id": edir_id, "error": str(e), "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -138,16 +170,16 @@ def user_detail(request, user_id, edir_id=None):
         return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="MEMBER_DETAIL",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": user_id,
                         "edir_id": edir_id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -169,8 +201,10 @@ def member_details(request, user_id):
             action="MEMBER_DETAILS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": user_id,
-                        "error": str(e)}
+                        "error": str(e), 
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -187,7 +221,7 @@ def update_member(request, member_id):
             edir=member.edir,
             status="Active"
         ).first()
-        EdirUserChangeRequest.objects.create(
+        member_request = EdirUserChangeRequest.objects.create(
             edir_user=member,
             edir=member.edir,
             action="UPDATE",
@@ -261,10 +295,18 @@ def self_register(request):
             address=address,
             # joined_date=timezone.now(),
         )
+        create_notification(
+            user=edir_user,
+            title="Self Registration",
+            message=f"Dear {edir_user.full_name}, You have been registered successfully.",
+            reference_id = member_request.id,
+            notification_type="Member",
+        )
         audit_log(
             action="SELF_REGISTRATION",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "phone_number": phone_number,
                 "full_name": full_name,
@@ -276,9 +318,11 @@ def self_register(request):
             action="SELF_REGISTRATION",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"phone_number": phone_number,
                         "full_name": full_name,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -317,7 +361,7 @@ def admin_create_user(request, edir_id):
         if committee_count < 2:
             if not is_committee:  # user is not committee
                 return Response(
-                    {"error": "First add the second committee before add members"},
+                    {"error": "Please add the second committee before adding members."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             else:
@@ -350,7 +394,7 @@ def admin_create_user(request, edir_id):
                     is_committee=bool(is_committee),
                     joined_date=timezone.now(),
                 )
-                EdirUserChangeRequest.objects.create(
+                member_request = EdirUserChangeRequest.objects.create(
                     edir_user=edir_user,
                     edir=edir,
                     action="CREATE",
@@ -358,19 +402,26 @@ def admin_create_user(request, edir_id):
                     maker=maker,
                     status="CREATED",
                 )
+                create_notification(
+                    user=edir_user,
+                    title="Adding the first Committee",
+                    message=f"Welcome {edir_user.full_name}! You were added to edir {edir.name} by {maker.full_name}.",
+                    reference_id = member_request.id,
+                    notification_type="Member",
+                )
                 audit_log(
                     action="ADD_COMMITTEE_MEMBER",
                     request=request,
                     status="SUCCESS",
+                    request_data= request.data,
                     extra_data={
-                        "phone_number": phone_number,
-                        "full_name": full_name,
+                        "edir_user_id": edir_user.id,
                         "edir_id": edir_id
                     },
                 )
-            return Response({'message': 'Committee member added by admin successfully'}, status=status.HTTP_201_CREATED)
+            return Response({'message': 'Committee member added successfully'}, status=status.HTTP_201_CREATED)
         else:
-            EdirUserChangeRequest.objects.create(
+            member_request = EdirUserChangeRequest.objects.create(
                 edir=edir,
                 action="CREATE",
                 new_value=request.data,
@@ -382,14 +433,15 @@ def admin_create_user(request, edir_id):
                 action="CREATE_MEMBER_REQUEST",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "phone_number": phone_number,
-                    "full_name": full_name,
+                    "request_id": member_request.id,
                     "edir_id": edir_id
                 },
             )
             return Response(
-                {"message": "Request sent for approval"},
+                {"message": "Member creation request sent for approval"},
                 status=status.HTTP_201_CREATED
             )
 
@@ -400,9 +452,11 @@ def admin_create_user(request, edir_id):
             action="CREATE_MEMBER_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id, 
                         "maker": maker.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -476,13 +530,28 @@ def approve_member (request, id):
                 )
             
             change.edir_user = edir_user
+            create_notification(
+                user=edir_user,
+                title="Member creation approved",
+                message=f"Dear {edir_user.full_name}! welcome to hibret amba. together we can",
+                reference_id = edir_user.id,
+                notification_type="Member",
+            )
+            create_notification(
+                user=change.maker,
+                title="Member creation approved",
+                message=f"Dear {change.maker.full_name}! your member creation request ({edir_user.phone_number}) was approved by {checker.full_name}",
+                reference_id = edir_user.id,
+                notification_type="Member",
+            )
             audit_log(
                 action="APPROVE_CREATE_MEMBER",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "phone_number": phone_number,
-                    "full_name": full_name,
+                    "user_id": edir_user.id,
                     "checker_id": checker.id
                 },
             )
@@ -496,13 +565,29 @@ def approve_member (request, id):
             edir_user.is_committee = bool(is_committee)
             edir_user.updated_date=timezone.now()
             edir_user.save()
+            if change.maker.id != edir_user.id:
+                create_notification(
+                    user=edir_user,
+                    title="Member update request approved",
+                    message=f"Dear {edir_user.full_name}! your profile information is updated, initiated by{change.maker.full_name} and approved by {checker.full_name}",
+                    reference_id = edir_user.id,
+                    notification_type="Member",
+                )
+            create_notification(
+                user=change.maker,
+                title="Member update request approved",
+                message=f"Dear {change.maker.full_name}! your member update request ({edir_user.phone_number}) was approved by {checker.full_name}",
+                reference_id = edir_user.id,
+                notification_type="Member",
+            )
             audit_log(
                 action="APPROVE_UPDATE_MEMBER",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "phone_number": phone_number,
-                    "full_name": full_name,
+                    "user_id": edir_user,
                     "checker_id": checker.id
                 },
             )
@@ -513,13 +598,21 @@ def approve_member (request, id):
             edir_user.status = "Not Active"
             edir_user.updated_date = timezone.now()
             edir_user.save()
+            create_notification(
+                user=change.maker,
+                title="Member disable request approved",
+                message=f"Dear {change.maker.full_name}! Your disable member request ({edir_user.phone_number}) was approved by {checker.full_name}",
+                reference_id = edir_user.id,
+                notification_type="Member",
+            )
             audit_log(
                 action="APPROVE_DEACTIVATE_MEMBER",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "phone_number": phone_number,
-                    "full_name": full_name,
+                    "user_id": edir_user,
                     "checker_id": checker.id
                 },
             )
@@ -531,16 +624,16 @@ def approve_member (request, id):
         return JsonResponse({"message": "The request was approved successfully", }, status=200)
     except EdirUserChangeRequest.DoesNotExist:
         return JsonResponse({"error": "The change request is not found "}, status=404)
-    except EdirUser.DoesNotExist:
-        return JsonResponse({"error": "The checker is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="APPROVE_MEMBER_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "cheker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -569,11 +662,19 @@ def reject_member (request, id):
         change.approved_at = timezone.now()
         change.checker = checker
         change.comment= reason
-        change.save()      
+        change.save()     
+        create_notification(
+            user=change.maker,
+            title=f"Member {change.action} request rejected",
+            message=f"Dear {change.maker.full_name}! your {change.action} member request for ({change.phone_number}) was rejected by {checker.full_name} with reason {reason}.",
+            reference_id = change.id,
+            notification_type="Member",
+        ) 
         audit_log(
             action="REJECT_MEMBER",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "request_id": id,
                 "rejection_reason": reason,
@@ -590,9 +691,11 @@ def reject_member (request, id):
             action="REJECT_MEMBER",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "cheker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -621,9 +724,16 @@ def cancel_member (request, id):
         change.approved_at = timezone.now()
         change.checker = checker
         # change.comment= reason
-        change.save()      
+        change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Member {change.action} request cancelled",
+            message=f"Dear {change.maker.full_name}! your {change.action} member request was cancelled successfully",
+            reference_id = change.id,
+            notification_type="Member",
+        ) 
         audit_log(
-            action="CANCEL_MEMBER",
+            action="CANCEL_MEMBER_REQUEST",
             request=request,
             status="SUCCESS",
             request_data=request.data,
@@ -637,7 +747,7 @@ def cancel_member (request, id):
         return JsonResponse({"error": "The change request is not found "}, status=404)
     except Exception as e:
         audit_log(
-            action="REJECT_MEMBER",
+            action="CANCEL_MEMBER_REQUEST",
             request=request,
             status="FAILED",
             request_data=request.data,
@@ -690,9 +800,11 @@ def check_user_in_edir(request, edir_id, phone_number):
             action="CHECK_USER_EXIST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id, 
                         "phone_number": phone_number,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -725,10 +837,18 @@ def set_new_password(request):
         user.set_password(password)
         user.save()
         refresh = RefreshToken.for_user(user)
+        create_notification(
+            user=user,
+            title=f"Set your first password",
+            message=f"Dear {user.full_name}! you have successfully setted your first password.",
+            reference_id = user.id,
+            notification_type="Member",
+        ) 
         audit_log(
                 action="SET_NEW_PASSWORD",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "phone_number": phone_number,
                     "user_id": user.id
@@ -745,8 +865,10 @@ def set_new_password(request):
             action="SET_NEW_PASSWORD",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"phone_number": phone_number,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -772,6 +894,20 @@ def check_phone(request):
             {"exists": False, "error": f"Phone {phone_number} not exist"},
             status=404
         )
+    except Exception as e:
+            audit_log(
+                action="CHECK_PHONE",
+                request=request,
+                status="FAILED",
+                request_data=request.data,
+                extra_data={"phone_number": phone_number,
+                            "error": str(e),
+                            "traceback":traceback.format_exc()}
+            )
+            return Response(
+                {'error': 'Internal server error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 #login and registration
 @api_view(['GET'])
@@ -788,17 +924,15 @@ def check_user_phone(request, phone_number):
             "exists": exists,
             "edir_user_exists": edir_user_exists
         }, status=status.HTTP_200_OK)
-    except User.DoesNotExist:
-        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "EdirUser not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="CHECK_MEMBER_PHONE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"phone_number": phone_number,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -816,7 +950,7 @@ def deactivate_member(request, member_id):
             edir=user.edir,
             status="Active"
         ).only("id").first()
-        EdirUserChangeRequest.objects.create(
+        member_request = EdirUserChangeRequest.objects.create(
             edir_user=user,
             edir=user.edir,
             action="DISABLE",
@@ -824,6 +958,13 @@ def deactivate_member(request, member_id):
             new_value= request.data,
             maker=maker,
             status="PENDING",
+        )
+        create_notification(
+            user=maker,
+            title="Member deactivation request",
+            message=f"Dear {user.full_name}! There is a request sent for approval to deactivate your account from edir {user.edir.name}.",
+            reference_id = member_request.id,
+            notification_type="Member",
         )
         audit_log(
             action="DEACTIVATE_MEMBER_REQUEST",
@@ -837,9 +978,6 @@ def deactivate_member(request, member_id):
         return JsonResponse({
             "message": "Member deactivation request sent for approval successfully",
         }, status=200)
-
-    except Edir.DoesNotExist:
-        return JsonResponse({"error": "Edir not found"}, status=404)
     except EdirUser.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
     except Exception as e:
@@ -847,6 +985,7 @@ def deactivate_member(request, member_id):
             action="DEATIVATE_MEMBER_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": member_id,
                         "maker_user_id": request.user.id,
                         "error": str(e)}
@@ -866,33 +1005,43 @@ def add_family(request, user_id):
             status="Active"
         ).only("id").first()
 
-        FamilyChangeRequest.objects.create(
+        fam_request = FamilyChangeRequest.objects.create(
             edir_user=user,
             action="CREATE",
             new_value=request.data,
             maker=maker,
             status="PENDING",
         )
+        create_notification(
+            user=user,
+            title="Create Family Request",
+            message=f"Dear {user.full_name}! There is a request sent for approval to add a family member for you by {maker.full_name}.",
+            reference_id = fam_request.id,
+            notification_type="Family",
+        )
         audit_log(
             action="ADD_FAMILY_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "maker_id":maker.id,
                 "user_id": user_id
             },
         )
         return Response({'message': 'family added by admin'}, status=status.HTTP_201_CREATED)
-    except User.DoesNotExist:
+    except EdirUser.DoesNotExist:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="ADD_FAMILY_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": user_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -976,7 +1125,7 @@ def family_detail(request, family_id):
                     edir=family.user.edir,
                     status="Active"
                 ).only("id").first()
-                FamilyChangeRequest.objects.create(
+                family_request = FamilyChangeRequest.objects.create(
                     family=family,
                     edir_user=family.user,
                     action="UPDATE",
@@ -985,10 +1134,18 @@ def family_detail(request, family_id):
                     maker=current_user,
                     status="PENDING",
                 )
+                create_notification(
+                    user=current_user,
+                    title="Update family request",
+                    message=f"Dear {family.user.full_name}! Your family ({family.user.full_name}) update request was sent for approval by {current_user.full_name}.",
+                    reference_id = family_request.id,
+                    notification_type="Family",
+                )
                 audit_log(
                     action="UPATE_FAMILY_REQUEST",
                     request=request,
                     status="SUCCESS",
+                    request_data=request.data,
                     extra_data={
                         "maker_id":current_user.id,
                         "user_id": family.user.id
@@ -1004,9 +1161,11 @@ def family_detail(request, family_id):
             action="FAMILY_DETAIL",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"family_id": family_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1026,7 +1185,7 @@ def deactivate_family(request, family_id):
             status="Active"
         ).only("id").first()
 
-        FamilyChangeRequest.objects.create(
+        family_request = FamilyChangeRequest.objects.create(
             family=family,
             edir_user=family.user,
             action="DISABLE",
@@ -1035,10 +1194,18 @@ def deactivate_family(request, family_id):
             maker=maker,
             status="PENDING",
         )
+        create_notification(
+            user=maker,
+            title="Deactivate family request",
+            message=f"Dear {family.user.full_name}! your family ({family.user.full_name}) deactivate request was sent for approval by {maker.full_name}.",
+            reference_id = family_request.id,
+            notification_type="Family",
+        )
         audit_log(
             action="DEACTIVATE_FAMILY_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data= request.data,
             extra_data={
                 "maker_id":maker.id,
                 "user_id": family.user.id
@@ -1052,6 +1219,7 @@ def deactivate_family(request, family_id):
             action="DEACTIVATE_FAMILY_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"family_id": family_id,
                         "maker_user_id": request.user.id,
                         "error": str(e)}
@@ -1081,7 +1249,6 @@ def approve_family(request, id):
                 {"error": "Already processed"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
         full_name = data.get('full_name')
         gender = data.get('gender')
         relationship = data.get('relationship')
@@ -1097,32 +1264,63 @@ def approve_family(request, id):
                 created_date=timezone.now(),
             )
             change.family = family
+            create_notification(
+                user=change.maker,
+                title="Family create request approved",
+                message=f"Dear {change.maker.full_name}! {edir_user.full_name} family ({family.full_name}) create request was approved by {checker.full_name}",
+                reference_id = change.id,
+                notification_type="Family",
+            )
+            if change.maker.id != edir_user.id:
+                create_notification(
+                    user=change.maker,
+                    title="Family create request approved",
+                    message=f"Dear {edir_user.full_name}! Your family  {family.full_name} was added. The request was summited by {change.maker.full_name} and approved by {checker.full_name}",
+                    reference_id = change.id,
+                    notification_type="Family",
+                )
             audit_log(
                 action="APPROVE_CREATE_FAMILY",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "family_id": family.id,
                     "family_request_id": id,
-                    "full_name": full_name,
+                    "user_id": edir_user.id,
                     "checker_id": checker.id
                 },
             )
         elif change.action == "UPDATE":
-
             family.full_name = full_name
             family.gender = gender
             family.relationship = relationship
             family.profession = profession
             family.save()
+            create_notification(
+                user=change.maker,
+                title="Family update request approved",
+                message=f"Dear {change.maker.full_name}! {edir_user.full_name} family ({family.full_name}) update request was approved by {checker.full_name}",
+                reference_id = change.id,
+                notification_type="Family",
+            )
+            if change.maker.id != edir_user.id:
+                create_notification(
+                    user=change.maker,
+                    title="Family update request approved",
+                    message=f"Dear {edir_user.full_name}! Your family  {family.full_name} was updated. The request was summited by {change.maker.full_name} and approved by {checker.full_name}",
+                    reference_id = change.id,
+                    notification_type="Family",
+                )
             audit_log(
                 action="APPROVE_UPDATE_FAMILY",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "family_id": family.id,
                     "family_request_id": id,
-                    "full_name": full_name,
+                    "user_id": edir_user,
                     "checker_id": checker.id
                 },
             )
@@ -1132,6 +1330,21 @@ def approve_family(request, id):
             family.status = "Not Active"
             family.updated_date = timezone.now()
             family.save()
+            create_notification(
+                user=change.maker,
+                title="Family disable request approved",
+                message=f"Dear {change.maker.full_name}! {edir_user.full_name} family ({family.full_name}) disable request was approved by {checker.full_name}",
+                reference_id = change.id,
+                notification_type="Family",
+            )
+            if change.maker.id != edir_user.id:
+                create_notification(
+                    user=change.maker,
+                    title="Family disable request approved",
+                    message=f"Dear {edir_user.full_name}! Your family  {family.full_name} was disabled. The request was summited by {change.maker.full_name} and approved by {checker.full_name}",
+                    reference_id = change.id,
+                    notification_type="Family",
+                )
             audit_log(
                 action="APPROVE_DISABLE_FAMILY",
                 request=request,
@@ -1139,7 +1352,7 @@ def approve_family(request, id):
                 extra_data={
                     "family_id": family.id,
                     "family_request_id": id,
-                    "full_name": full_name,
+                    "user_id": edir_user.id,
                     "checker_id": checker.id
                 },
             )
@@ -1155,9 +1368,11 @@ def approve_family(request, id):
             action="APPROVE_FAMILY_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "checker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1186,6 +1401,13 @@ def reject_family(request, id):
         change.checker = checker
         change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Family {change.action} request rejected",
+            message=f"Dear {change.maker.full_name}! {change.edir_user.full_name} family {change.action} request was rejected by {checker.full_name} with reason {reason}.",
+            reference_id = change.id,
+            notification_type="Family",
+        )
         audit_log(
             action="REJECT_FAMILY_REQUEST",
             request=request,
@@ -1222,7 +1444,6 @@ def reject_family(request, id):
 def cancel_family(request, id):
     try:
         change = FamilyChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         checker = EdirUser.objects.filter(
             user=request.user,
             edir=change.edir_user.edir,
@@ -1236,8 +1457,14 @@ def cancel_family(request, id):
         change.status = "Cancelled"
         change.approved_at = timezone.now()
         change.checker = checker
-        # change.comment= reason
         change.save()
+        create_notification(
+            user=checker,
+            title="Family Request Cancelled",
+            message=f"Dear {checker.full_name}, Your request to {change.action} a family member ({change.edir_user.full_name}) was cancelled successfully. ",
+            reference_id = id,
+            notification_type="Family",
+        )
         audit_log(
             action="CANCEL_FAMILY",
             request=request,
@@ -1277,28 +1504,7 @@ def add_edir(request):
         serializer = EdirSerializer(data=data)
         if serializer.is_valid():
             edir = serializer.save() 
-            maker = EdirUser.objects.filter(
-                user=request.user,
-                edir=edir,
-                status="Active"
-            ).only("id").first()
-            edir_request = EdirChangeRequest.objects.create(
-                edir=edir,
-                action="CREATE",
-                new_value=data,
-                maker=maker,
-                status="CREATED",
-            )
-            audit_log(
-                action="CREATE_EDIR",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "edir_id": edir.id,
-                    "request_id": edir_request.id,
-                    "maker_user_id": request.user.id
-                },
-            )
+            
             has_no_edir = EdirUser.objects.filter(user=request.user, edir__isnull=True).exists()
             if has_no_edir:
                 edir_user = EdirUser.objects.filter(user=request.user, edir__isnull=True).first()     
@@ -1349,9 +1555,33 @@ def add_edir(request):
             EdirUserChangeRequest.objects.create(
                 edir_user=edir_user,
                 action="ADD_MEMBER",
-                maker=maker,
+                maker=edir_user,
                 new_value=model_to_json(edir_user),
                 status="CREATED", 
+            )
+            edir_request = EdirChangeRequest.objects.create(
+                edir=edir,
+                action="CREATE",
+                new_value=data,
+                maker=edir_user,
+                status="CREATED",
+            )
+            create_notification(
+                user=edir_user,
+                title="Edir Created Successfully",
+                message=f"Dear {edir_user.full_name}, You have created an edir {edir.name} successfully. ",
+                reference_id = edir.id,
+                notification_type="Family",
+            )
+            audit_log(
+                action="CREATE_EDIR",
+                request=request,
+                status="SUCCESS",
+                extra_data={
+                    "edir_id": edir.id,
+                    "request_id": edir_request.id,
+                    "maker_user_id": request.user.id
+                },
             )
             return Response({'message':'Edir created successfully'}, status=status.HTTP_201_CREATED)
         else:
@@ -1361,8 +1591,10 @@ def add_edir(request):
             action="CREATE_EDIR",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1426,23 +1658,20 @@ def get_user_with_edirs(request):
             return Response({"edir": edirSerializer.data, "events": eventSerializer.data, "payments": serializer.data, "has_edir":True})
         else:
             return Response({"edir": None, "events": None, "payments":None, "has_edir":False})
-    except Edir.DoesNotExist:
-        return Response({"error": "Edir is not found "}, status=404)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "Edir User is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="DASHBOARD",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -1455,15 +1684,15 @@ def get_user_edirs(request):
         )
         serializer = EdirSerializer(edirs, many=True)
         return Response(serializer.data)
-    except Edir.DoesNotExist:
-        return Response({"error": "Edir  is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="FETCH_USER_EDIRS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1491,17 +1720,15 @@ def get_popular_edirs(request):
 
         serializer = EdirSerializer(edirs, many=True)
         return Response(serializer.data)
-    except Edir.DoesNotExist:
-        return Response({"error": "Edir  is not found "}, status=404)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "Edir User is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="FETCH_POPULAR_EDIRS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1520,15 +1747,15 @@ def get_requested_edirs(request):
 
         serializer = EdirUserChangeRequestSerializer(edirs, many=True)
         return Response(serializer.data)
-    except EdirUserChangeRequest.DoesNotExist:
-        return Response({"error": "Edir User change request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="FETCH_POPULAR_EDIRS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1554,8 +1781,6 @@ def join_edir(request, edir_id):
         return Response({'message': 'Edir join request submitted successfully'}, status=status.HTTP_201_CREATED)
     except Edir.DoesNotExist:
         return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
-    except EdirUser.DoesNotExist:
-        return JsonResponse({"error": "Edir User is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="JOIN_EDIR_REQUEST",
@@ -1575,7 +1800,7 @@ def join_edir(request, edir_id):
 @permission_classes([IsAuthenticated])
 def cancel_edir_request (request, id):
     try:
-        change = BankChangeRequest.objects.get(id=id)
+        change = EdirUserChangeRequest.objects.get(id=id)
         reason = request.data.get('reason')
         if change.status != "PENDING":
             return Response(
@@ -1586,20 +1811,29 @@ def cancel_edir_request (request, id):
         change.approved_at = timezone.now()
         change.comment= reason
         change.save()
-
+        audit_log(
+            action="CANCEL_EDIR_REQUEST",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "edir_id":change.edir.id,
+                "user_id": change.user.id,
+            },
+        )
         return JsonResponse({"message": "Edir request cancelled successfully"}, status=200)
-    except Edir.DoesNotExist:
-        return JsonResponse({"error": "Edir is not found "}, status=404)
-    except EdirUser.DoesNotExist:
-        return JsonResponse({"error": "User is not found in Edir Request"}, status=404)
+    except EdirUserChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Edir change request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="CANCEL_EDIR_REQUEST",
             request=request,
             status="FAILED",
+            request_data= request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1619,7 +1853,13 @@ def leave_edir (request, edir_id):
         edir_user.leave_reason = reason
         edir_user.updated_date = timezone.now()
         edir_user.save()
-        
+        create_notification(
+            user=edir_user,
+            title="User Leaved Edir Successfully",
+            message=f"Dear {edir_user.full_name}, You have left an edir {edir.name} successfully. ",
+            reference_id = edir_user.id,
+            notification_type="Edir",
+        )
         audit_log(
             action="LEAVE_EDIR",
             request=request,
@@ -1641,7 +1881,8 @@ def leave_edir (request, edir_id):
             status="FAILED",
             extra_data={"edir_id": edir.id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1671,6 +1912,7 @@ def disable_edir(request, edir_id):
             action="DISABLE_EDIR_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id":edir.id,
                 "user_id": edir_user.id
@@ -1684,9 +1926,11 @@ def disable_edir(request, edir_id):
             action="DISABLE_EDIR_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir.id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1707,9 +1951,11 @@ def edir_header(request, edir_id):
             action="FETCH_HEADER_EDIR",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir.id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1737,16 +1983,16 @@ def edir_detail(request, edir_id):
                          "bank_change_requests": bankRequestSerializer.data})
     except Edir.DoesNotExist:
         return Response({"error": "Edir is not found."},status=status.HTTP_404_NOT_FOUND)
-    except Bank.DoesNotExist:
-        return Response({"error": "Bank is not found."},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="EDIR_DETAILS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1775,6 +2021,7 @@ def update_edir(request, edir_id):
             action="UPDATE_EDIR_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id":edir.id,
                 "maker_user_id": maker.id
@@ -1788,9 +2035,11 @@ def update_edir(request, edir_id):
             action="UPDATE_EDIR_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1820,35 +2069,34 @@ def approve_edir(request, id):
             edir.address = new.get("address")
             edir.description = new.get("description")
             edir.updated_date = timezone.now()
-
             edir.save()
-            audit_log(
-                action="APPROVE_UPDATE_EDIR",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "edir_id": edir.id,
-                    "checker_user_id": checker.id
-                }
-            )
+            
         elif change.action == "DISABLE":
             edir.status = "Not Active"
             edir.updated_date = timezone.now()
             edir.save()
-            audit_log(
-                action="APPROVE_DISABLE_EDIR",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "edir_id": edir.id,
-                    "checker_user_id": checker.id
-                }
-            )
             change.comment = new.get("reason")
         change.status = "APPROVED"
         change.checker = checker
         change.approved_at = timezone.now()
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Edir {change.action} request Approved.".upper(),
+            message=f"Dear {change.maker.full_name}, Your edir {edir.name} {change.action.lower()} request was approved by {checker.full_name}. ",
+            reference_id = change.id,
+            notification_type="Edir",
+        )
+        audit_log(
+            action=f"APPROVE_{change.action}_EDIR",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "edir_id": edir.id,
+                "checker_user_id": checker.id
+            }
+        )
         return Response({"message": "Approved successfully"}, status=status.HTTP_200_OK)
     except EdirChangeRequest.DoesNotExist:
         return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
@@ -1857,9 +2105,11 @@ def approve_edir(request, id):
             action="UPDATE_EDIR_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1889,10 +2139,18 @@ def reject_edir(request, id):
         change.comment = reason
         change.approved_at = timezone.now()
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Edir {change.action} request rejected.",
+            message=f"Dear {change.maker.full_name}, Your edir {change.action.lower()} request was rejected by {checker.full_name} with reason {reason}. ",
+            reference_id = change.id,
+            notification_type="Edir",
+        )
         audit_log(
             action="REJECT_EDIR",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "request_id": id,
                 "checker_user_id": checker.id
@@ -1909,7 +2167,8 @@ def reject_edir(request, id):
             request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -1922,7 +2181,6 @@ def reject_edir(request, id):
 def cancel_edir(request, id):
     try:
         change = EdirChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         checker = EdirUser.objects.filter(
             user=request.user,
             edir=change.edir,
@@ -1937,9 +2195,15 @@ def cancel_edir(request, id):
         edir = change.edir
         change.status = "CANCELLED"
         change.checker = checker
-        # change.comment = reason
         change.approved_at = timezone.now()
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Edir {change.action} request cancelled.",
+            message=f"Dear {change.maker.full_name}, Your edir {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Edir",
+        )
         audit_log(
             action="CANCEL_EDIR",
             request=request,
@@ -1971,22 +2235,34 @@ def cancel_edir(request, id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def update_meeting_date(request, pk):
     try:
         edir = Edir.objects.get(id=pk)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir,
+            status="Active"
+        ).only("id").first()
         edir.meeting_date = request.data.get("meeting_date")
         edir.meeting_place = request.data.get("meeting_place")
         edir.save()
+        EdirChangeRequest.objects.create(
+            edir=edir,
+            action="Schedule_meeting",
+            new_value=request.data,
+            maker=maker,
+            status="Scheduled",
+        )
         audit_log(
             action="UPDATE_MEETING_DATE",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": pk,
-                "user_id": request.user.id
+                "user_id": maker.id
             }
         )
         return Response({"message": "Meeting date updated"}, status=200)
@@ -1997,9 +2273,11 @@ def update_meeting_date(request, pk):
             action="UPDATE_MEETING_DATE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": pk,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2026,6 +2304,7 @@ def add_bank(request, edir_id):
             action="ADD_BANK_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "request_id": bank_request.id,
@@ -2041,9 +2320,11 @@ def add_bank(request, edir_id):
             action="ADD_BANK_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2059,14 +2340,18 @@ def edir_active_bank_list(request, edir_id):
         
         serializer = BankWithEdirSerializer(bank, many=True)
         return Response(serializer.data)
+    except Edir.DoesNotExist:
+        return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_BANK_LISTS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "fetcher_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2078,11 +2363,12 @@ def edir_active_bank_list(request, edir_id):
 def get_bank_transactions(request, bank_id):
     try:
         bank = Bank.objects.get(id=bank_id)
-        
         deposits = (
             Deposit.objects
             .filter(bank=bank, payment_status__in=["Paid", "PAID"])
-            .annotate(total_amount=Sum("transactions__amount"))
+            .annotate(total_amount=Sum("transactions__amount",
+                                       filter=~Q(transactions__payment_status__in=["REVERSED","Disabled",]),))
+            .filter(total_amount__isnull=False)
             .order_by("-created_at")
         )
         paginator = AmbaPagination()
@@ -2090,8 +2376,6 @@ def get_bank_transactions(request, bank_id):
         serializer = SimpleDepositSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-        # serializer = SimpleDepositSerializer(deposits, many=True)
-        # return Response(serializer.data, status=200)
     except Bank.DoesNotExist:
         return Response({'error': 'Bank not found'},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -2124,9 +2408,11 @@ def bank_detail(request, bank_id):
             action="BANK_DETAIL",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"bank_id": bank_id,
                         "fetcher_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'failed to fetch bank details'},
@@ -2152,11 +2438,11 @@ def update_bank(request, bank_id):
             maker=maker,
             status="PENDING",
         )
-        serializer = BankWithEdirSerializer(bank)
         audit_log(
             action="UPDATE_BANK_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "maker_id":maker.id,
                 "bank_id": bank.id
@@ -2170,9 +2456,11 @@ def update_bank(request, bank_id):
             action="UPDATE_BANK_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"bank_id": bank_id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2203,6 +2491,7 @@ def deactivate_bank(request, bank_id):
             action="DEACTIVATE_BANK_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "maker_id":maker.id,
                 "bank_id": bank.id
@@ -2216,9 +2505,11 @@ def deactivate_bank(request, bank_id):
             action="DEACTIVATE_BANK_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"bank_id": bank.id,
                         "maker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2237,6 +2528,7 @@ def approve_bank (request, id):
                 status=status.HTTP_400_BAD_REQUEST
             )
         edir = change.edir
+        bank = None
         new = change.new_value
         checker = EdirUser.objects.filter(
             user=request.user,
@@ -2258,16 +2550,6 @@ def approve_bank (request, id):
             )
             bank.save()
             change.bank = bank
-            audit_log(
-                action="APPROVE_CREATE_BANK",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "bank_id": bank.id,
-                    "bank_request_id": id,
-                    "checker_id": checker.id
-                },
-            )
         elif change.action == "UPDATE":
             bank = change.bank
             bank.account_name = account_name
@@ -2275,46 +2557,46 @@ def approve_bank (request, id):
             bank.bank_name = bank_name
             bank.updated_date = timezone.now()
             bank.save()
-            audit_log(
-                action="APPROVE_UPDATE_BANK",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "bank_id": bank.id,
-                    "bank_request_id": id,
-                    "checker_id": checker.id
-                },
-            )
         elif change.action == "DISABLE":
              bank = change.bank
              bank.status = "Not Active"
              bank.updated_date = timezone.now()
              bank.save()
-             audit_log(
-                action="APPROVE_DISABLE_BANK",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "bank_id": bank.id,
-                    "bank_request_id": id,
-                    "checker_id": checker.id
-                },
-            )
         change.status = "APPROVED"
         change.approved_at = timezone.now()
         change.checker = checker
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Bank {change.action} request Approved.".upper(),
+            message=f"Dear {change.maker.full_name}, Your bank {bank.name} {change.action.lower()} request was approved by {checker.full_name}. ",
+            reference_id = change.id,
+            notification_type="Bank",
+        )
+        audit_log(
+            action=f"APPROVE_{change.action}_BANK",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                    "bank_id": bank.id,
+                    "bank_request_id": id,
+                    "checker_user_id": checker.id
+            }
+        )
         return JsonResponse({"message": "Bank request aproved successfully"}, status=200)
     except BankChangeRequest.DoesNotExist:
-        return JsonResponse({"error": "Bank is not found "}, status=404)
+        return JsonResponse({"error": "Bank request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="APPROVE_BANK_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "checker_user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2346,6 +2628,13 @@ def reject_bank (request, id):
         change.checker = checker
         change.comment = reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Bank {change.action} request Rejected".upper(),
+            message=f"Dear {change.maker.full_name}, Your bank {change.action.lower()} request was rejected by {checker.full_name} with reason {reason}. ",
+            reference_id = change.id,
+            notification_type="Bank",
+        )
         audit_log(
             action="REJECT_BANK_REQUEST",
             request=request,
@@ -2357,7 +2646,7 @@ def reject_bank (request, id):
         )
         return JsonResponse({"message": "Bank account creation request rejected successfully"}, status=200)
     except BankChangeRequest.DoesNotExist:
-        return JsonResponse({"error": "Bank is not found "}, status=404)
+        return JsonResponse({"error": "Bank request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="REJECT_BANK_REQUEST",
@@ -2378,13 +2667,11 @@ def reject_bank (request, id):
 def cancel_bank (request, id):
     try:
         change = BankChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         if change.status != "PENDING":
             return Response(
                 {"error": "Already processed"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         edir = change.edir
         checker = EdirUser.objects.filter(
             user=request.user,
@@ -2395,8 +2682,14 @@ def cancel_bank (request, id):
         change.status = "Cancelled"
         change.approved_at = timezone.now()
         change.checker = checker
-        # change.comment = reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Bank {change.action} request cancelled.".upper(),
+            message=f"Dear {change.maker.full_name}, Your bank {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Bank",
+        )
         audit_log(
             action="CANCEL_BANK_REQUEST",
             request=request,
@@ -2409,7 +2702,7 @@ def cancel_bank (request, id):
         )
         return JsonResponse({"message": "Bank account request cancelled successfully"}, status=200)
     except BankChangeRequest.DoesNotExist:
-        return JsonResponse({"error": "Bank is not found "}, status=404)
+        return JsonResponse({"error": "Bank reques is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="CANCEL_BANK_REQUEST",
@@ -2435,7 +2728,6 @@ def get_edir_expenses(request, edir_id):
                 edir_id=edir_id,
                 status="Active"
             )
-        # expense_serializer = ExpenseDetailSerializer(expenses, many=True)
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(expenses, request)
         serializer = ExpenseDetailSerializer(page, many=True)
@@ -2489,14 +2781,18 @@ def get_expense_detail(request, fee_id):
         serializer = ExpenseDetailSerializer(fee)
 
         return Response(serializer.data,status=200)
+    except Fee.DoesNotExist:
+        return JsonResponse({"error": "Fee is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="FETCH_EXPENSE_DETAIL",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Fee not found or failed to fetch expense details'},
@@ -2531,6 +2827,7 @@ def add_expense(request, edir_id):
             action="ADD_EXPENSE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "request_id": expense_request.id,
@@ -2538,14 +2835,18 @@ def add_expense(request, edir_id):
             }
         )
         return Response(request.data, status=status.HTTP_201_CREATED)
+    except Edir.DoesNotExist:
+        return JsonResponse({"error": "Edir is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="ADD_EXPENSE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2576,6 +2877,7 @@ def update_expense(request, fee_id):
             action="UPDATE_EXPENSE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "fee_id": fee_id,
                 "request_id": expense_request.id,
@@ -2590,9 +2892,11 @@ def update_expense(request, fee_id):
             action="UPDATE_EXPENSE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2624,6 +2928,7 @@ def disable_expense(request, fee_id):
             action="DISABLE_EXPENSE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "fee_id": fee_id,
                 "maker_user_id": maker.id
@@ -2637,9 +2942,11 @@ def disable_expense(request, fee_id):
             action="DISABLE_EXPENSE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2731,10 +3038,18 @@ def approve_expense (request, id):
                 bank.amount = bank.amount - amount
                 bank.updated_at = timezone.now()
                 bank.save()
+            create_notification(
+                user=change.maker,
+                title=f"Create expense request Approved.",
+                message=f"Dear {change.maker.full_name}, Your expense {category} create request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Expense",
+            )
             audit_log(
                 action="APPROVE_CREATE_EXPENSE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "expense_id": expense.id,
                     "request_id": id,
@@ -2811,10 +3126,18 @@ def approve_expense (request, id):
                 bank.amount = bank.amount - amount 
                 bank.updated_at = timezone.now()
                 bank.save()
+            create_notification(
+                user=change.maker,
+                title=f"Update expense request Approved.",
+                message=f"Dear {change.maker.full_name}, Your expense {expense.category} update request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Expense",
+            )
             audit_log(
                 action="APPROVE_UPDATE_EXPENSE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "expense_id": expense.id,
                     "request_id": id,
@@ -2841,11 +3164,19 @@ def approve_expense (request, id):
             expense.status = "Not Active"
             expense.updated_date = timezone.now()
             expense.save()
-            change.comment = new.get("reason")
+            change.comment = new.get("reason") 
+            create_notification(
+                user=change.maker,
+                title=f"Disable expense request Approved.",
+                message=f"Dear {change.maker.full_name}, Your expense {expense.category} disable request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Expense",
+            )
             audit_log(
                 action="APPROVE_DEACTIVATE_EXPENSE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "expense_id": expense.id,
                     "request_id": id,
@@ -2858,16 +3189,18 @@ def approve_expense (request, id):
         change.checker = checker
         change.save()
         return JsonResponse({"message": "Expense request approved successfully",}, status=200)
-    except Fee.DoesNotExist:
-        return JsonResponse({"error": "Expense is not found "}, status=404)
+    except ExpenseChangeRequest.DoesNotExist:
+        return JsonResponse({"error": "Expense request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="DISABLE_EXPENSE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2896,10 +3229,18 @@ def reject_expense (request, id):
         change.checker = checker
         change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} expense request rejected.".upper(),
+            message=f"Dear {change.maker.full_name}, Your expense {change.action.lower()} request was rejected by {checker.full_name} with reason {reason}. ",
+            reference_id = change.id,
+            notification_type="Expense",
+        )
         audit_log(
             action="REJECT_EXPENSE",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "reason": reason,
                 "request_id": id,
@@ -2914,9 +3255,11 @@ def reject_expense (request, id):
             action="REJECT_EXPENSE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -2929,7 +3272,6 @@ def reject_expense (request, id):
 def cancel_expense (request, id):
     try:
         change = ExpenseChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         checker = EdirUser.objects.filter(
             user=request.user,
             edir=change.edir,
@@ -2943,8 +3285,14 @@ def cancel_expense (request, id):
         change.status = "Cancelled"
         change.approved_at = timezone.now()
         change.checker = checker
-        # change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} expense request cancelled.".upper(),
+            message=f"Dear {change.maker.full_name}, Your expense {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Expense",
+        )
         audit_log(
             action="CANCEL_EXPENSE",
             request=request,
@@ -2983,13 +3331,11 @@ def get_edir_incomes(request, edir_id):
                 edir_id=edir_id,
                 status="Active"  
             )
-        # income_serializer = FeeDetailSerializer(incomes, many=True)
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(incomes, request)
         serializer = FeeDetailSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-        # return Response({income_serializer.data}, status=200)
     except Exception as e:
         audit_log(
             action="FETCH_INCOMES",
@@ -3052,9 +3398,11 @@ def get_income_detail(request, fee_id):
             action="GET_DEPOSIT_TRANSACTION",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Fee not found or failed to fetch income details'},
@@ -3082,20 +3430,25 @@ def add_income(request, edir_id):
             action="ADD_INCOME",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "maker_user_id": maker.id
             }
         )
         return Response(request.data, status=status.HTTP_201_CREATED)
+    except Edir.DoesNotExist:
+        return Response({"error": "Edir is not found."},status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="ADD_INCOME",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3126,6 +3479,7 @@ def update_income(request, fee_id):
             action="UPDATE_INCOME_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "fee_id": fee_id,
                 "maker_user_id": maker.id
@@ -3139,9 +3493,11 @@ def update_income(request, fee_id):
             action="UPDATE_INCOME_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3173,6 +3529,7 @@ def disable_income(request, fee_id):
             action="DEACTIVATE_INCOME_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "fee_id": fee_id,
                 "maker_user_id": maker.id
@@ -3186,6 +3543,7 @@ def disable_income(request, fee_id):
             action="DEACTiVATE_INCOME_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
                         "error": str(e)}
@@ -3280,10 +3638,18 @@ def approve_income (request, id):
                 bank.amount = bank.amount + amount
                 bank.updated_at = timezone.now()
                 bank.save()
+            create_notification(
+                user=change.maker,
+                title=f"Create income request Approved.",
+                message=f"Dear {change.maker.full_name}, Your income {category} create request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Income",
+            )
             audit_log(
                 action="APPROVE_CREATE_INCOME",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "request_id": id,
                     "checker_user_id": checker.id
@@ -3351,10 +3717,18 @@ def approve_income (request, id):
                 bank.amount = bank.amount  + amount 
                 bank.updated_at = timezone.now()
                 bank.save()
+            create_notification(
+                user=change.maker,
+                title=f"Update income request Approved.",
+                message=f"Dear {change.maker.full_name}, Your income {income.category} {change.action.lower()} request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Income",
+            )
             audit_log(
                 action="APPROVE_UPDATE_INCOME",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "request_id": id,
                     "checker_user_id": checker.id
@@ -3385,10 +3759,18 @@ def approve_income (request, id):
                 bank.amount = bank.amount - int(prev_trx.amount)  if prev_trx else bank.amount 
                 bank.updated_at = timezone.now()
                 bank.save()
+            create_notification(
+                user=change.maker,
+                title=f"Disable income request Approved.",
+                message=f"Dear {change.maker.full_name}, Your income {income.category} disable request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Income",
+            )
             audit_log(
                 action="APPROVE_DEACTIVATE_INCOME",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "request_id": id,
                     "checker_user_id": checker.id
@@ -3408,9 +3790,11 @@ def approve_income (request, id):
             action="APPROVE_INCOME",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3439,16 +3823,24 @@ def reject_income (request, id):
         change.checker = checker
         change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} income request rejected.".upper(),
+            message=f"Dear {change.maker.full_name}, Your income {change.action.lower()} request was rejected by {checker.full_name} with reason {reason}. ",
+            reference_id = change.id,
+            notification_type="Income",
+        )
         audit_log(
-                action="REJECT_INCOME",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "request_id": id,
-                    "reason": reason,
-                    "checker_user_id": checker.id
-                }
-            )
+            action="REJECT_INCOME",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "reason": reason,
+                "checker_user_id": checker.id
+            }
+        )
         return JsonResponse({"message": "Income request rejected successfully",}, status=200)
     except IncomeChangeRequest.DoesNotExist:
         return JsonResponse({"error": "Income change request is not found "}, status=404)
@@ -3457,9 +3849,11 @@ def reject_income (request, id):
             action="REJECT_INCOME",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3472,7 +3866,6 @@ def reject_income (request, id):
 def cancel_income (request, id):
     try:
         change = IncomeChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         checker = EdirUser.objects.filter(
             user=request.user,
             edir=change.edir,
@@ -3486,8 +3879,14 @@ def cancel_income (request, id):
         change.status = "Cancelled"
         change.approved_at = timezone.now()
         change.checker = checker
-        # change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} income request cancelled.".upper(),
+            message=f"Dear {change.maker.full_name}, Your income {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Income",
+        )
         audit_log(
                 action="CANCEL_INCOME",
                 request=request,
@@ -3528,15 +3927,11 @@ def get_edir_fees(request, edir_id):
                 status="Active",
                 fee_type="Fee",
             )
-        
-        # serializer = FeeDetailSerializer(fees, many=True)
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(fees, request)
         serializer = FeeDetailSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-        # return Response(serializer.data, status=status.HTTP_200_OK)
-    
     except Edir.DoesNotExist:
         return Response({"error": "Edir not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -3595,9 +3990,11 @@ def get_fee_detail(request, fee_id):
             action="FETCH_FEE_DETAILS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Fee not found or failed to fetch fee details'},
@@ -3612,16 +4009,18 @@ def get_fee_request_detail(request, id):
         serializer = FeeChangeRequestSerializer(fee_request)
 
         return Response(serializer.data, status=200)
-    except Fee.DoesNotExist:
+    except FeeChangeRequest.DoesNotExist:
         return Response({"error": "Fee not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Fee request not found or failed to fetch fee request details'},
@@ -3784,6 +4183,7 @@ def disable_fee(request, fee_id):
             action="DISABLE_FEE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": fee.edir.id,
                 "fee_id": fee_id,
@@ -3799,9 +4199,11 @@ def disable_fee(request, fee_id):
             action="DISABLE_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"fee_id": fee_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -3869,10 +4271,18 @@ def approve_fee (request, id):
                     continue
                 else:
                     FeeAssignment.objects.create(fee=fee, user=user)#, maker = request.user
+            create_notification(
+                user=change.maker,
+                title=f"Create fee request Approved.".upper(),
+                message=f"Dear {change.maker.full_name}, Your fee {category} create request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Fee",
+            )
             audit_log(
                 action="APPROVE_CREATE_FEE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "edir_id": fee.edir.id,
                     "fee_id": fee.id,
@@ -3924,10 +4334,19 @@ def approve_fee (request, id):
                             FeeAssignment.objects.create(fee=fee, user=user)
                 except EdirUser.DoesNotExist:
                     continue
+
+            create_notification(
+                user=change.maker,
+                title=f"Update fee request Approved.".upper(),
+                message=f"Dear {change.maker.full_name}, Your fee {fee.category} update request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Fee",
+            )
             audit_log(
                 action="APPROVE_UPDATE_FEE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "edir_id": fee.edir.id,
                     "fee_id": fee.id,
@@ -3945,10 +4364,18 @@ def approve_fee (request, id):
             for fee_assign in existing_assignments:
                 fee_assign.status = "Disabled" 
                 fee_assign.save()
+            create_notification(
+                user=change.maker,
+                title=f"Disable fee request Approved.".upper(),
+                message=f"Dear {change.maker.full_name}, Your fee {fee.category} disable request was approved by {checker.full_name}. ",
+                reference_id = change.id,
+                notification_type="Fee",
+            )
             audit_log(
-                action="APPROVE_DEISABLE_FEE",
+                action="APPROVE_DISABLE_FEE",
                 request=request,
                 status="SUCCESS",
+                request_data=request.data,
                 extra_data={
                     "edir_id": fee.edir.id,
                     "fee_id": fee.id,
@@ -3964,17 +4391,17 @@ def approve_fee (request, id):
         change.save()
         return JsonResponse({"message": "Fee request approved successfully",}, status=200)
     except FeeChangeRequest.DoesNotExist:
-        return JsonResponse({"error": "Fee is not found "}, status=404)
-    except EdirUser.DoesNotExist:
-        return Response({"error": "Checker not found."}, status=status.HTTP_400_BAD_REQUEST)
+        return JsonResponse({"error": "Fee request is not found "}, status=404)
     except Exception as e:
         audit_log(
             action="APPROVE_FEE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Fee approval failed due to Internal server error'},
@@ -4003,6 +4430,13 @@ def reject_fee (request, id):
         change.checker = checker
         change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} fee request Rejected.".upper(),
+            message=f"Dear {change.maker.full_name}, Your fee {change.action.lower()} request was rejected by {checker.full_name} with the reason: {reason}. ",
+            reference_id = change.id,
+            notification_type="Fee",
+        )
         audit_log(
             action="REJECT_FEE",
             request=request,
@@ -4021,9 +4455,11 @@ def reject_fee (request, id):
             action="REJECT_FEE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -4036,7 +4472,6 @@ def reject_fee (request, id):
 def cancel_fee (request, id):
     try:
         change = FeeChangeRequest.objects.get(id=id)
-        # reason = request.data.get('reason')
         checker = EdirUser.objects.filter(
             user=request.user,
             edir=change.edir,
@@ -4050,8 +4485,14 @@ def cancel_fee (request, id):
         change.status = "Cancelled"
         change.approved_at = timezone.now()
         change.checker = checker
-        # change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"{change.action} fee request Cancelled.".upper(),
+            message=f"Dear {change.maker.full_name}, Your fee {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Fee",
+        )
         audit_log(
             action="CANCEL_FEE",
             request=request,
@@ -4146,8 +4587,6 @@ def get_unpaid_fees_paginated(request, user_id):
         serializer = FeeAssignmentSerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-        # serializer = FeeAssignmentSerializer(unpaid_fees, many = True)
-        # return Response(serializer.data, status=status.HTTP_200_OK)
     except EdirUser.DoesNotExist:
         return JsonResponse({"error": "User is not found "}, status=404)
     except Exception as e:
@@ -4187,9 +4626,11 @@ def get_paid_fees(request, ref):
             action="FETCH_PAID_FEE",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"trx_ref": ref,
                         "fetcher_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to get paid fees list"},
@@ -4216,7 +4657,8 @@ def get_user_payments(request, user_id):
         serializer = PaymentHistorySerializer(page, many=True)
 
         return paginator.get_paginated_response(serializer.data)
-
+    except EdirUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_USER_PAYMENT",
@@ -4252,9 +4694,11 @@ def get_user_payment_requests(request, user_id):
             action="FETCH_PAYMENT_REQUESTS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_user_id": user_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch payment requests"},
@@ -4282,9 +4726,11 @@ def get_payment_detail(request, ref):
             action="FETCH_PAYMENT_DETAILSS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"trx_ref": ref,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch payments"},
@@ -4314,9 +4760,11 @@ def get_deposit_detail(request, id):
             action="FETCH_DEPOSIT_DETAILS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"deposit_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch payments"},
@@ -4350,15 +4798,18 @@ def get_undeposited_trxs(request, edir_id):
             for a in undeposited_trxs
         ]
         return Response(data, status=status.HTTP_200_OK)
-
+    except Edir.DoesNotExist:
+            return Response({'error': 'Edir not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_UNDEPOSIT_TRXS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Failed to fetch undeposited transactions list"},
@@ -4423,6 +4874,7 @@ def make_transfer(request, edir_id):
             action="MAKE_TRANSFER",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "user_id": user_id,
@@ -4432,19 +4884,20 @@ def make_transfer(request, edir_id):
         return Response({'message': 'transfer trx added by user'}, status=status.HTTP_201_CREATED)
     except Edir.DoesNotExist:
         return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
+    except EdirUser.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="MAKE_TRANSFER",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
-        return Response(
-            {"error": "Internal server error"},
-            status=500,
-        )
+        return Response({"error": "Internal server error"},status=500)
 
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
@@ -4513,6 +4966,7 @@ def admin_receive_cashes(request, edir_id):
             action="ADMIN_RECEIVE_CASHES",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "user_id": user_id,
@@ -4530,9 +4984,11 @@ def admin_receive_cashes(request, edir_id):
             action="ADMIN_RECEIVE_CASHES",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Internal server error"},
@@ -4542,7 +4998,6 @@ def admin_receive_cashes(request, edir_id):
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def deposit_payments(request, edir_id):
-    # user_id = request.data.get("userId")
     total_amount = int(request.data.get("total_amount"))
     bank_id = request.data.get("bank")
     cashes_data = request.data.get("cashes", [])
@@ -4601,7 +5056,6 @@ def deposit_payments(request, edir_id):
             }
         )
         return Response({'message': 'cash deposited by committee member'}, status=status.HTTP_201_CREATED)
-    
     except Edir.DoesNotExist:
         return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -4609,14 +5063,13 @@ def deposit_payments(request, edir_id):
             action="DEPOSIT_CASH_PAYMENTS",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "request_data": request.data}
         )
-        return Response(
-            {"error": "Internal server error"},
-            status=500,
-        )
+        return Response({"error": "Internal server error"},status=500,)
 
     
 @api_view(["POST"])
@@ -4676,10 +5129,12 @@ def update_pay_fees(request, edir_id):
                 )
                 fee_assignment.transaction_change_request = trx_request
                 fee_assignment.save()
+        
         audit_log(
             action="UPDATE_PAY_FEE_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
                 "user_id": user_id,
@@ -4694,9 +5149,11 @@ def update_pay_fees(request, edir_id):
             action="UPDATE_PAY_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={"edir_id": edir_id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {"error": "Internal server error"},
@@ -4760,6 +5217,7 @@ def disable_payment(request, ref):
             action="DISABLE_PAYMENT_REQUEST",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "trx_ref": ref,
                 "maker_user_id": maker.id
@@ -4774,15 +5232,14 @@ def disable_payment(request, ref):
             action="UPDATE_PAY_FEE_REQUEST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                         "trx_ref": ref,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({'error': 'Internal server error'},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["PUT"])
@@ -4840,15 +5297,6 @@ def approve_payments(request, id):
                 bank.amount = bank.amount - prev_trx.amount if prev_trx else bank.amount
                 bank.updated_at = timezone.now()
                 bank.save()
-            audit_log(
-                action="APPROVE_DISABLE_PAYMENT",
-                request=request,
-                status="SUCCESS",
-                extra_data={
-                    "request_id": id,
-                    "checker_user_id": checker.id
-                }
-            )
         else:
             deposit = None
             fees_data = new.get("fees", "[]")
@@ -4922,15 +5370,6 @@ def approve_payments(request, id):
                     bank.amount = bank.amount - prev_trx.amount + total_amount if prev_trx else bank.amount + total_amount
                     bank.updated_at = timezone.now()
                     bank.save()
-                audit_log(
-                    action="APPROVE_UPDATE_PAYMENT",
-                    request=request,
-                    status="SUCCESS",
-                    extra_data={
-                        "request_id": id,
-                        "checker_user_id": checker.id
-                    }
-                )
             elif change.action == "CREATE":
                 if isinstance(fees_data, str):
                     fee_ids = json.loads(fees_data)
@@ -4948,33 +5387,52 @@ def approve_payments(request, id):
                     amount=F("amount") + total_amount,
                     updated_date=timezone.now()
                     )
-                audit_log(
-                    action="APPROVE_CREATE_PAYMENT",
-                    request=request,
-                    status="SUCCESS",
-                    extra_data={
-                        "request_id": id,
-                        "checker_user_id": checker.id
-                    }
-                )
                 change.trx= trx
         change.status = "Approved"
         change.approved_at = timezone.now()
         change.checker = checker
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Your payment {change.action} request Approved.".upper(),
+            message=f"Dear {change.maker.full_name}, Your payment of amount {total_amount} ETB {change.action.lower()} request was approved by {checker}. ",
+            reference_id = change.id,
+            notification_type="Payment",
+        )
+        if change.maker.id != change.user.id:
+            create_notification(
+                user=change.user,
+                title=f"Your payment {change.action} request Approved.".upper(),
+                message=f"Dear {change.user.full_name}, Your payment of amount {total_amount} ETB {change.action.lower()} request was approved by {checker}. ",
+                reference_id = change.id,
+                notification_type="Payment",
+            )
+        audit_log(
+            action=f"APPROVE_{change.action}_PAYMENT",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
         return Response({"transaction_id": "payment approved successfully"}, status=201)
-    
-    except Edir.DoesNotExist:
-        return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
+    except TransactionChangeRequest.DoesNotExist:
+        return Response({'error': 'transaction request not found'}, status=status.HTTP_404_NOT_FOUND)
+    except FeeAssignment.DoesNotExist:
+        return Response({'error': 'fee assignment not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="APPROVE_PAYMENT",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                         "request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
         )
         return Response(
             {"error": "Internal server error"},
@@ -5003,10 +5461,26 @@ def reject_payment (request, id):
         change.checker = checker
         change.comment= reason
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Your payment {change.action} request rejected.".upper(),
+            message=f"Dear {change.maker.full_name}, Your payment {change.action.lower()} request was rejected by {checker} with the reason: {reason}. ",
+            reference_id = change.id,
+            notification_type="Payment",
+        )
+        if change.maker.id != change.user.id:
+            create_notification(
+                user=change.user,
+                title=f"Your payment {change.action} request rejected.".upper(),
+                message=f"Dear {change.user.full_name}, Your payment {change.action.lower()} request was rejected by {checker} with the reason: {reason}. ",
+                reference_id = change.id,
+                notification_type="Payment",
+            )
         audit_log(
             action="REJECT_PAYMENT",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "request_id": id,
                 "reason":reason,
@@ -5021,10 +5495,12 @@ def reject_payment (request, id):
             action="REJECT_PAYMENT",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                         "request_id": id,
                         "user_id": request.user.id,
-                        "error": str(e)}
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5051,6 +5527,13 @@ def cancel_payment (request, id):
         change.approved_at = timezone.now()
         change.checker = checker
         change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Your payment {change.action} request cancelled.".upper(),
+            message=f"Dear {change.maker.full_name}, Your payment {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Payment",
+        )
         audit_log(
             action="CANCEL_PAYMENT",
             request=request,
@@ -5108,9 +5591,11 @@ def change_password(request):
             action="CHANGE_PASSWORD",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5164,10 +5649,12 @@ def add_event(request, edir_id):
             action="ADD_EVENT",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "edir_id":edir_id,
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5188,17 +5675,17 @@ def edir_event_list(request, edir_id):
         return Response(serializer.data)
     except Edir.DoesNotExist:
         return Response({"detail": "Edir not added"}, status=status.HTTP_404_NOT_FOUND)
-    except Event.DoesNotExist:
-        return Response({"detail": "Event not added"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_EVENT_LIST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "edir_id":edir_id,
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5212,16 +5699,16 @@ def popular_event_list(request):
         event = Event.objects.filter(edir__isnull=True, status="Active")
         serializer = EventSerializer(event, many=True)
         return Response(serializer.data)
-    except Event.DoesNotExist:
-        return Response({"detail": "Event not added"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         audit_log(
             action="FETCH_POPULAR_EVENT_LIST",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5250,10 +5737,12 @@ def event_detail(request, event_id):
             action="EVENT_DETAIL",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "event_id": event_id,
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback": traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5279,6 +5768,7 @@ def deactivate_event(request, event_id):
             action="DEACTIVATE_EVENT",
             request=request,
             status="SUCCESS",
+            request_data=request.data,
             extra_data={
                 "event_id":event_id,
                 "user_id": maker.id
@@ -5292,10 +5782,12 @@ def deactivate_event(request, event_id):
             action="DEACTIVATE_EVENT",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "event_id": event_id,
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
@@ -5314,12 +5806,198 @@ def get_helps(request):
             action="FETCH_HELP",
             request=request,
             status="FAILED",
+            request_data=request.data,
             extra_data={
                 "user_id": request.user.id,
-                "error": str(e)}
+                "error": str(e),
+                "traceback":traceback.format_exc()}
         )
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def save_device_token(request):
+    token = request.data.get("token")
+    if not token:
+        return Response({ "message": "Token is required."},status=400,)
+    DeviceToken.objects.update_or_create(
+        user=request.user,
+        defaults={"token": token}
+    )
+
+    return Response({"message": "Token saved"})
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_notifications(request, user_id):
+    try:
+        current_user = EdirUser.objects.get(id=user_id)
+        notifications = Notification.objects.filter(user=current_user, is_read = True ).order_by("-created_at")
+
+        # serializer = NotificationSerializer(notifications, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(notifications, request)
+        serializer = NotificationSerializer(page, many=True)
+
+        return paginator.get_paginated_response(serializer.data)
+        # return Response(serializer.data)
+    except Exception as e:
+        audit_log(
+            action="FETCH_NOTIFICATONS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={ #"edir_user_id": user_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to fetch notifications"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_unread_notifications(request, user_id):
+    try:
+        current_user = EdirUser.objects.get(id=user_id)
+        notifications = Notification.objects.filter(user=current_user, is_read = False ).order_by("-created_at")
+
+        # serializer = NotificationSerializer(notifications, many=True)
+        paginator = AmbaPagination()
+        page = paginator.paginate_queryset(notifications, request)
+        serializer = NotificationSerializer(page, many=True)
+
+        return paginator.get_paginated_response(serializer.data)
+        # return Response(serializer.data)
+    except Exception as e:
+        audit_log(
+            action="FETCH_UNREAD_NOTIFICATONS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={ #"edir_user_id": user_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to fetch unread notifications"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def unread_count(request, user_id):
+    try:
+        current_user = EdirUser.objects.get(id=user_id)
+        count = Notification.objects.filter(
+            user=current_user,
+            is_read=False,
+        ).count()
+
+        return Response( count)
+    except Exception as e:
+        audit_log(
+            action="COUNT_UNREAD_NOTIFICATONS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={#"edir_user_id": user_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to count unread notifications"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def read_notification(request, id):
+    try:
+        notification = Notification.objects.get(id=id)
+        if notification.is_read is not True :
+            notification.is_read = True
+            notification.save()
+
+        serializer = NotificationSerializer(notification)
+
+        return Response(serializer.data)
+        # return Response(serializer.data)
+        # return Response({"message": "Marked as read"})
+    except Notification.DoesNotExist:
+        return Response({"message": "Notification not found."}, status=404)
+    except Exception as e:
+        audit_log(
+            action="READ_NOTIFICATONS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={#"edir_user_id": user_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to read notifications"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def mark_all_as_read(request, user_id):
+    try:
+        current_user = EdirUser.objects.get(id=user_id)
+        Notification.objects.filter(
+            user=current_user,
+            is_read=False,
+        ).update(is_read=True)
+        return Response({"message": "All notifications marked as read."})
+    except Exception as e:
+        audit_log(
+            action="MARK_ALL_AS_READ_NOTIFICATONS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={#"edir_user_id": user_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to mark all notifications as read"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+def send_push_notification(user, title, body):
+    tokens = DeviceToken.objects.filter(user=user).values_list("token", flat=True)
+
+    for token in tokens:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            token=token,
+        )
+
+        messaging.send(message)
+
+def notify_user(user, title, message):
+    # Save to DB
+    Notification.objects.create(
+        user=user,
+        title=title,
+        message=message
+    )
+    # Send push
+    send_push_notification(user, title, message)

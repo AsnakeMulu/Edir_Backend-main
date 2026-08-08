@@ -155,6 +155,7 @@ class EdirUserChangeRequest(models.Model):
 
     edir = models.ForeignKey(Edir, on_delete=models.SET_NULL, null=True, blank=True)
     edir_user = models.ForeignKey(EdirUser, on_delete=models.SET_NULL, blank=True, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, blank=True, null=True)
     phone_number = models.CharField(max_length=15)
 
     action = models.CharField(max_length=30, choices=ACTION_CHOICES)
@@ -639,3 +640,26 @@ class Help(models.Model):
 
     def __str__(self):
         return f"{self.question} ({self.answer})"
+    
+class Notification(models.Model):
+    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, related_name="notifications")
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    notification_type = models.CharField(max_length=50, null=True, blank=True)
+    reference_id = models.IntegerField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.full_name} - {self.title}"
+    
+class DeviceToken(models.Model):
+    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)
+    token = models.CharField(max_length=255)
+    device_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+

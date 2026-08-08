@@ -2,7 +2,7 @@ from urllib import request
 
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest
+from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification, DeviceToken
 from django.db.models import Sum
 from django.contrib.auth import password_validation
 
@@ -155,27 +155,19 @@ class EdirUserChangeRequestSerializer(serializers.ModelSerializer):
         ]
 
 class FamilyWithUserSerializer(serializers.ModelSerializer):
-    has_edit_pending = serializers.SerializerMethodField()
-    has_disable_pending = serializers.SerializerMethodField()
+    has_pending = serializers.SerializerMethodField()
     class Meta:
         model = Family
         fields = [
-            'id', 'full_name', 'gender', 'profession', 'relationship', 'user', 'has_edit_pending', 'has_disable_pending'
+            'id', 'full_name', 'gender', 'profession', 'relationship', 'user', 'has_pending'
         ]
     
-    def get_has_edit_pending(self, obj):
+    def get_has_pending(self, obj):
         return FamilyChangeRequest.objects.filter(
             family=obj,
-            action="UPDATE",
             status="PENDING"
         ).exists()
 
-    def get_has_disable_pending(self, obj):
-        return FamilyChangeRequest.objects.filter(
-            family=obj,
-            action="DISABLE",
-            status="PENDING"
-        ).exists()
 
 class FamilyChangeRequestSerializer(serializers.ModelSerializer):
     maker = SimpleEdirUserSerializer(read_only=True)
@@ -241,12 +233,13 @@ class EdirDetailOnDashboardSerializer(serializers.ModelSerializer):
     unpaid_fees_total_amount = serializers.SerializerMethodField()
     unpaid_fees_total = serializers.SerializerMethodField()
     committee_members = serializers.SerializerMethodField()
+    notification = serializers.SerializerMethodField()
 
     class Meta:
         model = Edir
         fields = [
-            "id", "name", "monthly_fee", "meeting_date", "meeting_place",
-            "member_count", "unpaid_fees_total_amount","unpaid_fees_total", "committee_members"
+            "id", "name", "monthly_fee", "meeting_date", "meeting_place", "notification",
+            "member_count", "unpaid_fees_total_amount","unpaid_fees_total", "committee_members", 
         ]
     def get_member_count(self, obj):
         return EdirUser.objects.filter(edir=obj, status="Active").count()
@@ -279,6 +272,14 @@ class EdirDetailOnDashboardSerializer(serializers.ModelSerializer):
                 transaction=None,  
             ).count()
         return total or 0
+    def get_notification(self, obj):
+            user = EdirChangeRequest.objects.filter(edir=obj, status="PENDING").count()
+            bank = BankChangeRequest.objects.filter(edir=obj, status="PENDING").count()
+            fee = FeeChangeRequest.objects.filter(edir=obj, status="PENDING").count()
+            expense = ExpenseChangeRequest.objects.filter(edir=obj, status="PENDING").count()
+            income = IncomeChangeRequest.objects.filter(edir=obj, status="PENDING").count()
+            total = user + bank + expense + income + fee
+            return total or 0
     def get_committee_members(self, obj):
         committees = EdirUser.objects.filter(
             edir=obj,
@@ -1051,3 +1052,23 @@ class HelpSerializer(serializers.ModelSerializer):
     class Meta:
         model = Help
         fields = ["id", "question", "answer", "type"]
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "user",
+            # "user_name",
+            "title",
+            "message",
+            "notification_type",
+            "reference_id",
+            "is_read",
+            "created_at",]
+
+class DeviceTokenSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = DeviceToken
+        fields = "__all__"

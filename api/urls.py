@@ -6,7 +6,8 @@ from . import views
 urlpatterns = [
     #User and Member related endpoints
     path('edir/<int:edir_id>/members/', views.members_list, name='members-list'), # Members
-    path('edir/<int:edir_id>/member_requests/', views.member_requests, name='member-requests'), # Members
+    path('edir/<int:edir_id>/member_requests/', views.member_requests, name='member-requests'), # Member requests
+    path('member_request/<int:user_id>/', views.member_request, name='member-request'),
     path('members/<int:edir_id>/active/', views.active_members_list, name='active-members-list'), #Add Fee, Expense and Income
     path('admin-create-user/<int:edir_id>/', views.admin_create_user, name='admin-create-user'), # New member
     path('check-user-in-edir/<int:edir_id>/<int:phone_number>/', views.check_user_in_edir, name='check-user-in-edir'), #New Member
@@ -126,6 +127,13 @@ urlpatterns = [
     path("event/<int:event_id>/deactivate/", views.deactivate_event, name="deactivate-event"),
     
     path("help/", views.get_helps, name="user-helps"),
+    path("notifications/<int:user_id>/",views.get_notifications,name="notifications"),
+    path("notifications/unread/<int:user_id>/",views.get_unread_notifications,name="unread_notifications"),
+    path("notifications/unread-count/<int:user_id>/",views.unread_count,name="unread-count"),
+    path("notifications/save-device-token/",views.save_device_token, name="save-device-token"),
+    path("notification/<int:id>/",views.read_notification, name="read-notification"),
+    path("notifications/read-all/<int:user_id>/",views.mark_all_as_read,name="mark-all-as-read"),
+
 ]
 
 if settings.DEBUG:
