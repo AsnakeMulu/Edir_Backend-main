@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 core/*firebase-adminsdk*.json
+# Firebase / Google Cloud credentials
+*.json
+core/*firebase-adminsdk*.json
 
 # Distribution / packaging
 .Python
