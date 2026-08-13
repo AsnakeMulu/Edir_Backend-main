@@ -761,6 +761,33 @@ def cancel_member (request, id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def member_request_count(request, edir_id):
+    try:
+        edir = Edir.objects.get(id=edir_id)
+        count = EdirUserChangeRequest.objects.filter(
+            edir=edir,
+            status="PENDING",
+        ).count()
+
+        return Response( count)
+    except Exception as e:
+        audit_log(
+            action="COUNT_MEMBER_REQUESTS",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id,
+                        # "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {"error": "Failed to count pending member requests"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def check_user_in_edir(request, edir_id, phone_number):

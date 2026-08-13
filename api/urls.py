@@ -17,6 +17,7 @@ urlpatterns = [
     path('approve_member/<int:id>/', views.approve_member, name='approve-member'), # Member approve request
     path('reject_member/<int:id>/', views.reject_member, name='reject-member'), # Member reject request
     path('member/cancel/<int:id>/', views.cancel_member, name='cancel-member'), # Member cancel request
+    path("member_requests/count/<int:edir_id>/",views.member_request_count,name="member-request-count"),
     
     path('user/<int:user_id>/', views.user_detail, name='user-detail'), # change password and user context
     path('user/<int:user_id>/<int:edir_id>/', views.user_detail, name='user-detail-with-edir'), # change password and user context
