@@ -27,15 +27,15 @@ from django.forms.models import model_to_dict
 from core.audit import model_to_json, audit_log
 from django.core.serializers.json import DjangoJSONEncoder
 from api.notification_service import create_notification
-import firebase_admin
-from firebase_admin import credentials, messaging
-firebase_key_path = os.path.join(
-    settings.BASE_DIR,
-    "core",
-    "hibret-amba-firebase-adminsdk-fbsvc-cdff8f4067.json"
-)
-cred = credentials.Certificate(firebase_key_path)
-firebase_admin.initialize_app(cred)
+# import firebase_admin
+# from firebase_admin import credentials, messaging
+# firebase_key_path = os.path.join(
+#     settings.BASE_DIR,
+#     "core",
+#     "hibret-amba-firebase-adminsdk-fbsvc-cdff8f4067.json"
+# )
+# cred = credentials.Certificate(firebase_key_path)
+# firebase_admin.initialize_app(cred)
 
 User = get_user_model()
 

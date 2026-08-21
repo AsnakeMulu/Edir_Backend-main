@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import CustomUser, Help, Event, Edir
+from .models import CustomUser, EdirUser, Help, Event, Edir
 
 # @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
@@ -16,6 +16,24 @@ class CustomUserAdmin(UserAdmin):
         (None, {
             'classes': ('wide',),
             'fields': ('phone_number', 'password1', 'password2', 'is_staff', 'is_active')} #
+        ),
+    )
+    search_fields = ('phone_number',)
+    ordering = ('phone_number',)
+
+@admin.register(EdirUser)
+class EdirUserAdmin(admin.ModelAdmin):
+    model = EdirUser
+    list_display = ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'address',  'is_committee')
+    # list_filter = ('address', 'gender', 'full_name', 'profession',) 
+    fieldsets = (
+        (None, {'fields': ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'address', 'is_committee')}),
+        
+    )
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('phone_number', 'full_name', 'gender', 'marital_status', 'profession', 'address', 'is_committee')} #
         ),
     )
     search_fields = ('phone_number',)
@@ -96,3 +114,4 @@ class EdirAdmin(admin.ModelAdmin):
 
 
 admin.site.register(CustomUser, CustomUserAdmin)
+# admin.site.register(EdirUser, EdirUserAdmin)
