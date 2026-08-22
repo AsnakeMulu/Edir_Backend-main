@@ -281,7 +281,7 @@ def self_register(request):
             password=make_password(password),
         )
         user.save()
-        UserChangeRequest.objects.create(
+        member_request = UserChangeRequest.objects.create(
             user=user,
             action="CREATE",
             new_value=model_to_dict(user, exclude=["password","last_login", "user_permissions","updated_date"]),
