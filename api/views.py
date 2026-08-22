@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
-from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer
+from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer, EdirJoinRequestSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, DeviceToken, Notification
 from .pagination import AmbaPagination
@@ -49,7 +49,7 @@ def members_list(request, edir_id=None):
         edir_users = EdirUser.objects.filter(
             edir=edir,
             status="Active"
-        )
+        ).order_by("-id")
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(edir_users, request)
         serializer = SimpleEdirUserSerializer(page, many=True)
@@ -1080,7 +1080,7 @@ def add_family(request, user_id):
 def user_family_list(request, user_id):
     try:
         user = EdirUser.objects.get(id=user_id)
-        family = Family.objects.filter(user=user, status="Active")
+        family = Family.objects.filter(user=user, status="Active").order_by("-id")
         # serializer = FamilyWithUserSerializer(family, many=True)
         
         paginator = AmbaPagination()
@@ -1735,14 +1735,15 @@ def get_popular_edirs(request):
             status="Active"
         ).values("edir_id")
         excluded_edir_requests = EdirUserChangeRequest.objects.filter(
-            user=request.user.phone_number,
+            phone_number=request.user.phone_number,
             status="PENDING"
         ).values("edir_id")
-
+        
         edirs = Edir.objects.filter(
             status="Active", is_popular = True
         ).exclude(
-            id__in=Subquery(excluded_edirs, excluded_edir_requests)
+            Q(id__in=excluded_edirs) |
+            Q(id__in=excluded_edir_requests)
         )
 
         serializer = EdirSerializer(edirs, many=True)
@@ -1767,12 +1768,12 @@ def get_popular_edirs(request):
 def get_requested_edirs(request):
     try:
         edirs = EdirUserChangeRequest.objects.filter(
-            user=request.user.phone_number,
-            status__in=["PENDING", "REJECTED", "CANCELLED"],
-            action = "JOIN_REQUEST"
+            phone_number=request.user.phone_number,
+            status__in=["PENDING", "REJECTED"],
+            action = "JOIN"
         )
 
-        serializer = EdirUserChangeRequestSerializer(edirs, many=True)
+        serializer = EdirJoinRequestSerializer(edirs, many=True)
         return Response(serializer.data)
     except Exception as e:
         audit_log(
@@ -1845,7 +1846,7 @@ def cancel_edir_request (request, id):
             request_data=request.data,
             extra_data={
                 "edir_id":change.edir.id,
-                "user_id": change.user.id,
+                # "user_id": change.user.id,
             },
         )
         return JsonResponse({"message": "Edir request cancelled successfully"}, status=200)
@@ -2754,7 +2755,7 @@ def get_edir_expenses(request, edir_id):
                 fee_type="Expense",
                 edir_id=edir_id,
                 status="Active"
-            )
+            ).order_by("-id")
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(expenses, request)
         serializer = ExpenseDetailSerializer(page, many=True)
@@ -3357,7 +3358,7 @@ def get_edir_incomes(request, edir_id):
                 fee_type="Income",
                 edir_id=edir_id,
                 status="Active"  
-            )
+            ).order_by("-id")
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(incomes, request)
         serializer = FeeDetailSerializer(page, many=True)
@@ -3953,7 +3954,7 @@ def get_edir_fees(request, edir_id):
                 edir=edir,
                 status="Active",
                 fee_type="Fee",
-            )
+            ).order_by("-id")
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(fees, request)
         serializer = FeeDetailSerializer(page, many=True)
@@ -4608,7 +4609,7 @@ def get_unpaid_fees_paginated(request, user_id):
             .filter(has_pending=False)
             .order_by("-id")
             .select_related("fee")
-        )
+        ).order_by("-id")
         paginator = AmbaPagination()
         page = paginator.paginate_queryset(unpaid_fees, request)
         serializer = FeeAssignmentSerializer(page, many=True)

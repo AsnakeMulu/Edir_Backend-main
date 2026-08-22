@@ -154,6 +154,28 @@ class EdirUserChangeRequestSerializer(serializers.ModelSerializer):
             "created_at",
         ]
 
+class EdirJoinRequestSerializer(serializers.ModelSerializer):
+    request_id = serializers.IntegerField(source="id", read_only=True)
+    request_status = serializers.CharField(source="status", read_only=True)
+    name = serializers.CharField(source="edir.name", read_only=True)
+    monthly_fee = serializers.DecimalField(
+        source="edir.monthly_fee",
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    address = serializers.CharField(source="edir.address", read_only=True)
+
+    class Meta:
+        model = EdirUserChangeRequest
+        fields = [
+            "request_id",
+            "request_status",
+            "name",
+            "monthly_fee",
+            "address",
+        ]
+
 class FamilyWithUserSerializer(serializers.ModelSerializer):
     has_pending = serializers.SerializerMethodField()
     class Meta:
