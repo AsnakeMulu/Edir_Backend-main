@@ -131,7 +131,7 @@ urlpatterns = [
     path("notifications/<int:user_id>/",views.get_notifications,name="notifications"),
     path("notifications/unread/<int:user_id>/",views.get_unread_notifications,name="unread_notifications"),
     path("notifications/unread-count/<int:user_id>/",views.unread_count,name="unread-count"),
-    path("notifications/save-device-token/",views.save_device_token, name="save-device-token"),
+    # path("notifications/save-device-token/",views.save_device_token, name="save-device-token"),
     path("notification/<int:id>/",views.read_notification, name="read-notification"),
     path("notifications/read-all/<int:user_id>/",views.mark_all_as_read,name="mark-all-as-read"),
 

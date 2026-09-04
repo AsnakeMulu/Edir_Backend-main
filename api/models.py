@@ -653,13 +653,13 @@ class Notification(models.Model):
     def __str__(self):
         return f"{self.user.full_name} - {self.title}"
     
-class DeviceToken(models.Model):
-    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)
-    token = models.CharField(max_length=255)
-    device_name = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
+# class DeviceToken(models.Model):
+#     user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)
+#     token = models.CharField(max_length=255)
+#     device_name = models.CharField(
+#         max_length=100,
+#         blank=True,
+#         null=True,
+#     )
+#     created_at = models.DateTimeField(auto_now_add=True)
 

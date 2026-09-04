@@ -2,7 +2,7 @@ from urllib import request
 
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification, DeviceToken
+from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification
 from django.db.models import Sum
 from django.contrib.auth import password_validation
 
@@ -922,8 +922,10 @@ class PaymentHistorySerializer(serializers.ModelSerializer):
 # Payment Details
 class TransactionSerializer(serializers.ModelSerializer):
     deposit = DepositForTransactionSerializer(read_only=True)  
+    user = VerySimpleEdirUserSerializer(read_only=True)  
     fees = FeeAssignmentSerializer(source="feeassignment_trx", many=True)
     maker = serializers.SerializerMethodField()
+    checker = serializers.SerializerMethodField()
     has_pending = serializers.SerializerMethodField()
 
     total_amount = serializers.IntegerField(source="amount")
@@ -939,7 +941,9 @@ class TransactionSerializer(serializers.ModelSerializer):
             "fees",
             "has_pending",
             "maker",
-            "deposit"
+            "checker",
+            "deposit",
+            "user"
         ]
 
     def get_has_pending(self, obj):
@@ -960,6 +964,22 @@ class TransactionSerializer(serializers.ModelSerializer):
             return {
                 "id": maker["maker__id"],
                 "full_name": maker["maker__full_name"],
+            }
+
+        return None
+
+    def get_checker(self, obj):
+        checker =  (
+            TransactionChangeRequest.objects
+            .filter(trx=obj)
+            .select_related("checker")
+            .values("checker__id", "checker__full_name")
+            .first()
+        )
+        if checker:
+            return {
+                "id": checker["checker__id"],
+                "full_name": checker["checker__full_name"],
             }
 
         return None
@@ -1089,8 +1109,8 @@ class NotificationSerializer(serializers.ModelSerializer):
             "is_read",
             "created_at",]
 
-class DeviceTokenSerializer(serializers.ModelSerializer):
+# class DeviceTokenSerializer(serializers.ModelSerializer):
 
-    class Meta:
-        model = DeviceToken
-        fields = "__all__"
+#     class Meta:
+#         model = DeviceToken
+#         fields = "__all__"

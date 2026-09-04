@@ -11,7 +11,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
 from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer, EdirJoinRequestSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, DeviceToken, Notification
+from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, Notification
 from .pagination import AmbaPagination
 from django.utils import timezone
 from django.db import transaction
@@ -867,7 +867,7 @@ def set_new_password(request):
         create_notification(
             user=user,
             title=f"Set your first password",
-            message=f"Dear {user.full_name}! you have successfully setted your first password.",
+            message=f"Dear Member( {user.phone_number})! you have successfully setted your first password.",
             reference_id = user.id,
             notification_type="Member",
         ) 
@@ -2597,7 +2597,7 @@ def approve_bank (request, id):
         create_notification(
             user=change.maker,
             title=f"Bank {change.action} request Approved.".upper(),
-            message=f"Dear {change.maker.full_name}, Your bank {bank.name} {change.action.lower()} request was approved by {checker.full_name}. ",
+            message=f"Dear {change.maker.full_name}, Your bank {bank.bank_name} {change.action.lower()} request was approved by {checker.full_name}. ",
             reference_id = change.id,
             notification_type="Bank",
         )
@@ -5068,6 +5068,11 @@ def deposit_payments(request, edir_id):
             trx.updated_date = timezone.now()
             trx.deposit = deposit
             trx.save()
+            
+            trx_request = TransactionChangeRequest.objects.filter(trx_id=trx.id).last()
+            trx_request.approved_date = timezone.now()
+            trx_request.checker = maker
+            trx_request.save()
         Bank.objects.filter(id=bank_id).update(
             amount=F("amount") + total_amount,
             updated_date=timezone.now()
@@ -5845,18 +5850,18 @@ def get_helps(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def save_device_token(request):
-    token = request.data.get("token")
-    if not token:
-        return Response({ "message": "Token is required."},status=400,)
-    DeviceToken.objects.update_or_create(
-        user=request.user,
-        defaults={"token": token}
-    )
+# @api_view(["POST"])
+# @permission_classes([IsAuthenticated])
+# def save_device_token(request):
+#     token = request.data.get("token")
+#     if not token:
+#         return Response({ "message": "Token is required."},status=400,)
+#     DeviceToken.objects.update_or_create(
+#         user=request.user,
+#         defaults={"token": token}
+#     )
 
-    return Response({"message": "Token saved"})
+#     return Response({"message": "Token saved"})
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -6006,19 +6011,19 @@ def mark_all_as_read(request, user_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-def send_push_notification(user, title, body):
-    tokens = DeviceToken.objects.filter(user=user).values_list("token", flat=True)
+# def send_push_notification(user, title, body):
+#     tokens = DeviceToken.objects.filter(user=user).values_list("token", flat=True)
 
-    for token in tokens:
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            token=token,
-        )
+#     for token in tokens:
+#         message = messaging.Message(
+#             notification=messaging.Notification(
+#                 title=title,
+#                 body=body,
+#             ),
+#             token=token,
+#         )
 
-        messaging.send(message)
+#         messaging.send(message)
 
 def notify_user(user, title, message):
     # Save to DB
