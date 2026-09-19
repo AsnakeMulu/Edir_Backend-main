@@ -55,6 +55,7 @@ urlpatterns = [
     path("edir/reject/<int:id>/", views.reject_edir, name="reject_edir_edit"),
     path("edir/cancel/<int:id>/", views.cancel_edir, name="cancel-edir"),
     path("edir/<int:pk>/update_meeting/", views.update_meeting_date, name="update-meeting-date"),
+    path("edirs/<int:edir_id>/penalty/", views.edir_penalty_configuration,name="edir-penalty-configuration"),
 
     #Bank account related endpoints
     path('add-bank/<int:edir_id>/', views.add_bank, name='add-bank'),   

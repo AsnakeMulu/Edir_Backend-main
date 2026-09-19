@@ -489,7 +489,8 @@ class Deposit(models.Model):
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE)
     payment_method = models.CharField(max_length=50, blank=True, null=True, choices=TRANSACTION_METHOD)
     bank = models.ForeignKey(Bank, on_delete=models.CASCADE, related_name="bank", blank=True, null=True)
-    user = models.ForeignKey(EdirUser, on_delete=models.CASCADE, related_name="deposit_user", null=True, blank=True)
+    maker = models.ForeignKey(EdirUser, on_delete=models.SET_NULL, related_name="deposit_user", null=True, blank=True)
+    checker = models.ForeignKey(EdirUser, on_delete=models.SET_NULL, related_name="deposit_checked_by", null=True, blank=True)
     image = models.ImageField(upload_to='images/', null=True, blank=True) 
     
     payment_status = models.CharField(max_length=10, choices=STATUS, default="Paid")
@@ -652,6 +653,98 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.user.full_name} - {self.title}"
+
+
+class PenaltyConfiguration(models.Model):
+    FLAT = "FLAT"
+    PERCENTAGE = "PERCENTAGE"
+    CALCULATION_TYPES = [
+        (FLAT, "Flat"),
+        (PERCENTAGE, "Percentage"),
+    ]
+
+    edir = models.OneToOneField(
+        Edir,
+        on_delete=models.CASCADE,
+        related_name="penalty_configuration"
+    )
+
+    enabled = models.BooleanField(default=False)
+    calculation_type = models.CharField(
+        max_length=20,
+        choices=CALCULATION_TYPES,
+        default=FLAT
+    )
+
+    initial_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0
+    )
+
+    tolerance_days = models.PositiveIntegerField(default=0)
+    incremental = models.BooleanField(default=False)
+    increment_interval_days = models.PositiveIntegerField(
+        null=True,
+        blank=True
+    )
+
+    increment_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    maximum_penalty = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    percentage_base = models.CharField(
+        max_length=20,
+        choices=[
+            ("FEE", "Fee"),
+            ("OUTSTANDING", "Outstanding"),
+        ],
+        default="FEE"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    calculated_at = models.DateTimeField(auto_now_add=True)
+
+class FeePenalty(models.Model):
+    fee_assignment = models.OneToOneField(
+        FeeAssignment,
+        on_delete=models.CASCADE,
+        related_name="penalties"
+    )
+
+    calculation_type = models.CharField(max_length=20)
+    base_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )
+
+    penalty_rate = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    penalty_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )
+    penalty_days = models.PositiveIntegerField()
+    days_late = models.PositiveIntegerField()
+    increment_count = models.PositiveIntegerField()
+    calculated_at = models.DateTimeField(auto_now_add=True)
     
 # class DeviceToken(models.Model):
 #     user = models.ForeignKey(EdirUser, on_delete=models.CASCADE)

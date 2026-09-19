@@ -2,9 +2,11 @@ from urllib import request
 
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification
+from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification, PenaltyConfiguration, FeePenalty
 from django.db.models import Sum
 from django.contrib.auth import password_validation
+
+from decimal import Decimal
 
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
@@ -213,11 +215,43 @@ class FamilyChangeRequestSerializer(serializers.ModelSerializer):
         ]
 
 
+class PenaltyConfigurationSerializer(
+    serializers.ModelSerializer
+):
+    class Meta:
+        model = PenaltyConfiguration
+
+        fields = [
+            "id",
+            "edir",
+            "enabled",
+            "calculation_type",
+            "initial_value",
+            "tolerance_days",
+            "incremental",
+            "increment_interval_days",
+            "increment_value",
+            "maximum_penalty",
+            "percentage_base",
+            "created_at",
+            "updated_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+        
 class EdirSerializer(serializers.ModelSerializer):
     meeting_date = serializers.DateField(
         input_formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"],
         required=False,
         allow_null=True,
+    )
+    penalty_configuration = PenaltyConfigurationSerializer(
+        read_only=True,
+        allow_null=True
     )
     class Meta:
         model = Edir
@@ -231,6 +265,7 @@ class EdirSerializer(serializers.ModelSerializer):
             "description",
             "meeting_date",
             "meeting_place",
+            "penalty_configuration",
         ] 
         read_only_fields = (
             "is_popular",
@@ -788,12 +823,18 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
                 new_value["bank"] = None
 
         if new_value and new_value.get("fees"):
-            fee_ids = new_value["fees"]
+            fees = new_value["fees"]
             fees_list = []
 
-            for fee_id in fee_ids:
+            for fee_item in fees:
+                fee_id = fee_item.get("fee_id")
                 try:
-                    fee = Fee.objects.get(id=fee_id)
+                    # fee = Fee.objects.get(id=fee_id)
+                    assignment = FeeAssignment.objects.select_related(
+                        "fee"
+                    ).get(id=fee_id)
+
+                    fee = assignment.fee
 
                     supported_member = None
                     if fee.supported_member:
@@ -808,7 +849,9 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
                         "fee_name": fee.name,
                         "amount": fee.amount,
                         "category": fee.category,
-                        "supported_member": supported_member
+                        "supported_member": supported_member,
+                        "penalty": fee_item.get("penalty"),
+                        "total_amount": fee_item.get("total_amount"),
                     })
 
                 except (EdirUser.DoesNotExist, Fee.DoesNotExist):
@@ -864,10 +907,12 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
 
 class FeeAssignmentSerializer(serializers.ModelSerializer):
     fee_id = serializers.IntegerField(source="fee.id")
-    name = serializers.CharField(source="fee.name")
+    fee_name = serializers.CharField(source="fee.name")
     amount = serializers.IntegerField(source="fee.amount") #, max_digits=10, decimal_places=2
     category = serializers.CharField(source="fee.category")
     supported_member = serializers.SerializerMethodField()
+    penalty = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
 
     assignment_id = serializers.IntegerField(source="id")
     class Meta:
@@ -875,14 +920,29 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         fields = [
             "assignment_id",
             "fee_id",
-            "name",
+            "fee_name",
             "amount",
             "category",
             "supported_member",
+            "penalty",
+            "total_amount",
         ]
 
     def get_supported_member(self, obj):
         return obj.fee.supported_member.full_name if obj.fee.supported_member else None
+    def get_penalty(self, obj):
+        try:
+            penalty = obj.penalties
+            return penalty.penalty_amount
+        except FeePenalty.DoesNotExist:
+            return 0
+
+    def get_total_amount(self, obj):
+        try:
+            penalty = obj.penalties
+            return obj.fee.amount + penalty.penalty_amount
+        except FeePenalty.DoesNotExist:
+            return obj.fee.amount
     
 
 class DepositForTransactionSerializer(serializers.ModelSerializer):
@@ -986,7 +1046,9 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 class SimpleDepositSerializer(serializers.ModelSerializer):
     bank = BankSerializer(read_only=True)
-    user = SimpleEdirUserSerializer(read_only=True)
+    # user = SimpleEdirUserSerializer(read_only=True)
+    maker = SimpleEdirUserSerializer(read_only=True)
+    checker = SimpleEdirUserSerializer(read_only=True)
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
@@ -997,7 +1059,9 @@ class SimpleDepositSerializer(serializers.ModelSerializer):
             "created_at",
             "transaction_type",
             "payment_method",
-            "user",
+            # "user",
+            "maker",
+            "checker",
             "total_amount",
         ]
 
@@ -1114,3 +1178,4 @@ class NotificationSerializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = DeviceToken
 #         fields = "__all__"
+

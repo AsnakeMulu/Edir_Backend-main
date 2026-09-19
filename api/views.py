@@ -9,9 +9,9 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
 from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
-from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer, EdirJoinRequestSerializer
+from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer, EdirJoinRequestSerializer, PenaltyConfigurationSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, Notification
+from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, FeePenalty, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, Notification, PenaltyConfiguration
 from .pagination import AmbaPagination
 from django.utils import timezone
 from django.db import transaction
@@ -27,6 +27,7 @@ from django.forms.models import model_to_dict
 from core.audit import model_to_json, audit_log
 from django.core.serializers.json import DjangoJSONEncoder
 from api.notification_service import create_notification
+from core.penality_services import calculate_penalty
 # import firebase_admin
 # from firebase_admin import credentials, messaging
 # firebase_key_path = os.path.join(
@@ -864,13 +865,13 @@ def set_new_password(request):
         user.set_password(password)
         user.save()
         refresh = RefreshToken.for_user(user)
-        create_notification(
-            user=user,
-            title=f"Set your first password",
-            message=f"Dear Member( {user.phone_number})! you have successfully setted your first password.",
-            reference_id = user.id,
-            notification_type="Member",
-        ) 
+        # create_notification(
+        #     user=user,
+        #     title=f"Set your first password",
+        #     message=f"Dear Member( {user.phone_number})! you have successfully setted your first password.",
+        #     reference_id = user.id,
+        #     notification_type="Member",
+        # ) 
         audit_log(
                 action="SET_NEW_PASSWORD",
                 request=request,
@@ -4570,8 +4571,48 @@ def get_unpaid_fees(request, user_id):
             .order_by("-id")
             .select_related("fee")
         )
+        calculation_date = timezone.localdate()
+        data = []
+        for assignment in unpaid_fees:
+            # Get the Edir penalty configuration
+            penalty_config = PenaltyConfiguration.objects.filter(
+                edir=assignment.user.edir,
+                enabled=True
+            ).first()
+
+            fee_amount = Decimal(str(assignment.fee.amount))
+
+            result = calculate_penalty(
+                penalty_config=penalty_config,
+                fee_amount=fee_amount,
+                due_date=assignment.fee.payment_date,
+                calculation_date=calculation_date,
+                outstanding_amount=fee_amount,
+            )
+
+            penalty = result["penalty"]
+            total_payable = (
+                fee_amount + penalty
+            ).quantize(Decimal("0.01"))
+
+            data.append({
+                "assignment_id": assignment.id,
+                "fee_id": assignment.fee.id,
+                "fee_name": assignment.fee.name,
+                "category": assignment.fee.category,
+                "amount": str(fee_amount),
+
+                # Penalty information
+                "penalty": str(penalty),
+                "penalty_days": result["penalty_days"],
+                "days_late": result["days_late"],
+                "increment_count": result["increment_count"],
+
+                # Final amount
+                "total_amount": str(total_payable),
+            })
         serializer = FeeAssignmentSerializer(unpaid_fees, many = True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(data, status=status.HTTP_200_OK)
     except EdirUser.DoesNotExist:
         return JsonResponse({"error": "User is not found "}, status=404)
     except Exception as e:
@@ -4886,7 +4927,7 @@ def make_transfer(request, edir_id):
         )
         for fee in fees_data:
             fee_assignment = FeeAssignment.objects.filter(
-                fee_id=fee,
+                id=fee.get("assignment_id"),
                 user=user,
                 status="Active",
             ).first()
@@ -5334,7 +5375,8 @@ def approve_payments(request, id):
             deposit = None
             fees_data = new.get("fees", "[]")
             bank_id = new.get("bank")
-            total_amount = int(new.get("total_amount"))
+            # total_amount = int(new.get("total_amount"))
+            total_amount = Decimal(str(new.get("total_amount", "0")))
             method = new.get("method")
             image = change.image
             # user_id = new.get("userId")
@@ -5343,6 +5385,7 @@ def approve_payments(request, id):
                 fee_ids = json.loads(fees_data)
             else:
                 fee_ids = fees_data
+
             bank = None
             if bank_id and str(bank_id).isdigit():
                 bank = Bank.objects.filter(id=int(bank_id)).first()
@@ -5353,7 +5396,8 @@ def approve_payments(request, id):
                     payment_method=method,
                     bank=bank,
                     image=image,
-                    user=checker,
+                    maker=change.maker,
+                    checker=checker,
                 )
             # reuse deposit if method is cash and previous trx has deposit
             if prev_trx and method == "CASH":
@@ -5409,12 +5453,36 @@ def approve_payments(request, id):
                 else:
                     fee_ids = fees_data
                 # 3. add transaction data to new fee assignments
-                for fee_id in fee_ids:
-                    fee_assign = FeeAssignment.objects.filter(fee_id=fee_id, user = change.user, transaction__isnull=True).first()
+                for fee in fee_ids:
+                    penalty_amount = Decimal(str(fee.get("penalty", "0")))
+                    total_amount = Decimal(str(fee.get("total_amount", "0")))
+                    fee_assign = FeeAssignment.objects.filter(id=fee.get("assignment_id"), user = change.user, transaction__isnull=True).first()
+                    print(f"fee_assign: {fee_assign}")
                     if fee_assign:
                         fee_assign.updated_date = timezone.now()
                         fee_assign.transaction = trx
                         fee_assign.save()
+
+                        FeePenalty.objects.update_or_create(
+                            fee_assignment=fee_assign,
+                            defaults={
+                                "calculation_type": (
+                                    edir.penalty_configuration.calculation_type
+                                    if edir.penalty_configuration
+                                    else ""
+                                ),
+                                "base_amount": Decimal(str(fee.get("amount", "0"))),
+                                # "penalty_rate": (
+                                #     edir.penalty_configuration.penalty_rate
+                                #     if edir.penalty_configuration
+                                #     else None
+                                # ),
+                                "penalty_amount": penalty_amount,
+                                # "total_amount": Decimal(str(fee.get("total_amount", "0"))),
+                                "days_late": fee.get("days_late",0),
+                                "penalty_days": fee.get("penalty_days",0),
+                                "increment_count": fee.get("increment_count",0),
+                            })
                 # 4. update bank amount
                 Bank.objects.filter(id=bank_id).update(
                     amount=F("amount") + total_amount,
@@ -6025,12 +6093,51 @@ def mark_all_as_read(request, user_id):
 
 #         messaging.send(message)
 
-def notify_user(user, title, message):
-    # Save to DB
-    Notification.objects.create(
-        user=user,
-        title=title,
-        message=message
+# def notify_user(user, title, message):
+#     # Save to DB
+#     Notification.objects.create(
+#         user=user,
+#         title=title,
+#         message=message
+#     )
+#     # Send push
+#     send_push_notification(user, title, message)
+
+
+@api_view(["GET", "PUT"])
+@permission_classes([IsAuthenticated])
+def edir_penalty_configuration(request, edir_id):
+
+    edir = get_object_or_404(Edir, id=edir_id)
+
+    configuration, created = (
+        PenaltyConfiguration.objects.get_or_create(edir=edir)
     )
-    # Send push
-    send_push_notification(user, title, message)
+
+    # GET
+    if request.method == "GET":
+
+        serializer = PenaltyConfigurationSerializer(configuration)
+        return Response(serializer.data)
+
+    # PUT
+    # validate_penalty_configuration(
+    #     request.data
+    # )
+
+    serializer = PenaltyConfigurationSerializer(
+        configuration,
+        data=request.data,
+        partial=True
+    )
+
+    serializer.is_valid(
+        raise_exception=True
+    )
+
+    serializer.save()
+
+    return Response(
+        serializer.data,
+        status=status.HTTP_200_OK
+    )
