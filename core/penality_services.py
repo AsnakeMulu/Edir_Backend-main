@@ -78,26 +78,17 @@ def calculate_penalty(
         }
 
     # Days actually subject to penalty
-    penalty_days = (
-        days_late - penalty_config.tolerance_days
-    )
+    penalty_days = (days_late - penalty_config.tolerance_days)
 
     # -----------------------------
     # Initial penalty
     # -----------------------------
 
-    if penalty_config.calculation_type == (
-        PenaltyConfiguration.FLAT
-    ):
-
-        penalty = Decimal(
-            str(penalty_config.initial_value)
-        )
-
+    if penalty_config.calculation_type == (PenaltyConfiguration.FLAT):
+        penalty = Decimal(str(penalty_config.initial_value))
     else:
-
         if penalty_config.percentage_base == (
-            PenaltyConfiguration.OUTSTANDING
+            PenaltyConfiguration.PERCENTAGE
         ):
             base_amount = (
                 outstanding_amount
@@ -148,7 +139,7 @@ def calculate_penalty(
             else:
 
                 if penalty_config.percentage_base == (
-                    PenaltyConfiguration.OUTSTANDING
+                    PenaltyConfiguration.PERCENTAGE
                 ):
                     base_amount = (
                         outstanding_amount
@@ -192,7 +183,7 @@ def calculate_penalty(
             # For percentage mode, maximum_penalty
             # represents a maximum percentage.
             if penalty_config.percentage_base == (
-                PenaltyConfiguration.OUTSTANDING
+                PenaltyConfiguration.PERCENTAGE
             ):
                 base_amount = (
                     outstanding_amount

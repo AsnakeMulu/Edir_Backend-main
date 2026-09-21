@@ -829,12 +829,12 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
             for fee_item in fees:
                 fee_id = fee_item.get("fee_id")
                 try:
-                    # fee = Fee.objects.get(id=fee_id)
-                    assignment = FeeAssignment.objects.select_related(
-                        "fee"
-                    ).get(id=fee_id)
+                    fee = Fee.objects.get(id=fee_id)
+                    # assignment = FeeAssignment.objects.select_related(
+                    #     "fee"
+                    # ).get(id=fee_item.get("assignment_id"))
 
-                    fee = assignment.fee
+                    # fee = assignment.fee
 
                     supported_member = None
                     if fee.supported_member:
@@ -880,7 +880,7 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
 
             for fee_id in fee_ids:
                 try:
-                    fee = Fee.objects.get(id=fee_id)
+                    fee = Fee.objects.get(id=fee_id.get("fee_id"))
 
                     supported_member = None
                     if fee.supported_member:
@@ -895,7 +895,9 @@ class PaymentChangeRequestSerializer(serializers.ModelSerializer):
                         "fee_name": fee.name,
                         "amount": fee.amount,
                         "category": fee.category,
-                        "supported_member": supported_member
+                        "supported_member": supported_member,
+                        "penalty": fee_id.get("penalty"),
+                        "total_amount": fee_id.get("total_amount"),
                     })
 
                 except (EdirUser.DoesNotExist, Fee.DoesNotExist):

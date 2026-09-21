@@ -707,7 +707,7 @@ class PenaltyConfiguration(models.Model):
         max_length=20,
         choices=[
             ("FEE", "Fee"),
-            ("OUTSTANDING", "Outstanding"),
+            ("PERCENTAGE", "Percentage"),
         ],
         default="FEE"
     )
@@ -715,7 +715,34 @@ class PenaltyConfiguration(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    calculated_at = models.DateTimeField(auto_now_add=True)
+    # calculated_at = models.DateTimeField(auto_now_add=True)
+
+
+class PenaltyConfigurationChangeRequest(models.Model):
+    ACTION_CHOICES = (
+        ("UPDATE", "Update"),
+    )
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("CANCELLED", "Cancelled"),
+    )
+    penalty = models.ForeignKey(PenaltyConfiguration, on_delete=models.CASCADE, null=True, blank=True)
+    edir = models.ForeignKey(Edir, on_delete=models.CASCADE, null=True, blank=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+
+    maker = models.ForeignKey(EdirUser, related_name="penalty_maker", on_delete=models.CASCADE, null=True)
+    checker = models.ForeignKey(EdirUser, related_name="penalty_checker", on_delete=models.SET_NULL, null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    comment = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
 
 class FeePenalty(models.Model):
     fee_assignment = models.OneToOneField(

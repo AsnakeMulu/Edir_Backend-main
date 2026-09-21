@@ -11,7 +11,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from .serializers import EdirUserDetailSerializer, ExpenseChangeRequestSerializer, FeeChangeRequestSerializer, FamilyWithUserSerializer, EdirSerializer, IncomeDetailSerializer, PaymentChangeRequestSerializer, PaymentHistorySerializer, PaymentSerializer, TransactionSerializer, EdirSerializer, FeeSerializer, ChangePasswordSerializer, BankChangeRequestSerializer, EdirUserChangeRequestSerializer, UndepositedTransactionSerializer
 from .serializers import BankWithEdirSerializer, EdirDetailSerializer, EdirSerializer, HelpSerializer, EventSerializer, FeeDetailSerializer, FeeAssignmentSerializer, EdirChangeRequestSerializer, ExpenseChangeRequestSerializer, ExpenseDetailSerializer, FamilyChangeRequestSerializer, SimpleDepositSerializer, EdirDetailOnDashboardSerializer, SimpleEdirUserSerializer, NotificationSerializer, EdirJoinRequestSerializer, PenaltyConfigurationSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, FeePenalty, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, Notification, PenaltyConfiguration
+from .models import Deposit, DepositChangeRequest, EdirChangeRequest, EdirUserChangeRequest, ExpenseChangeRequest, FeeAssignmentTrxChangeRequest, FeeChangeRequest, Family, Edir, Fee, FeeAssignment, Bank, EdirUser, FeePenalty, Help, Event, IncomeChangeRequest, PenaltyConfigurationChangeRequest, Transaction, BankChangeRequest, TransactionChangeRequest, UserChangeRequest, FamilyChangeRequest, Notification, PenaltyConfiguration
 from .pagination import AmbaPagination
 from django.utils import timezone
 from django.db import transaction
@@ -1532,6 +1532,19 @@ def add_edir(request):
         serializer = EdirSerializer(data=data)
         if serializer.is_valid():
             edir = serializer.save() 
+
+            PenaltyConfiguration.objects.create(
+                edir=edir,
+                enabled=False,
+                calculation_type=PenaltyConfiguration.FLAT,
+                initial_value=Decimal("0.00"),
+                tolerance_days=0,
+                incremental=False,
+                increment_interval_days=None,
+                increment_value=None,
+                maximum_penalty=None,
+                percentage_base="FEE",
+            )
             
             has_no_edir = EdirUser.objects.filter(user=request.user, edir__isnull=True).exists()
             if has_no_edir:
@@ -2312,6 +2325,249 @@ def update_meeting_date(request, pk):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def update_penalty(request, edir_id):
+    try:
+        edir = Edir.objects.get(id=edir_id)
+        penalty = PenaltyConfiguration.objects.get(edir=edir)
+        maker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir,
+            status="Active"
+        ).only("id").first()
+        PenaltyConfigurationChangeRequest.objects.create(
+            penalty = penalty,
+            edir=edir,
+            action="UPDATE",
+            old_value= model_to_json(penalty, exclude=["updated_date"]), 
+            new_value=request.data,
+            maker=maker,
+            status="PENDING",
+        )
+        audit_log(
+            action="UPDATE_PENALTY_REQUEST",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "edir_id":edir.id,
+                "maker_user_id": maker.id
+            },
+        )
+        return Response("Message: Update request submitted successfully.", status=status.HTTP_200_OK)
+    except Edir.DoesNotExist:
+        return Response({"error": "Edir not found."},status=status.HTTP_404_NOT_FOUND)
+    except PenaltyConfiguration.DoesNotExist:
+            return Response({"error": "Penalty is not found."},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="UPDATE_PENALTY_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"edir_id": edir_id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def approve_penality(request, id):
+    try:
+        change = PenaltyConfigurationChangeRequest.objects.get(id=id)
+        edir = change.edir
+        penalty = change.penalty
+        new = change.new_value
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=edir,
+            status="Active"
+        ).only("id").first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        penalty.enabled = new.get("enabled")
+        edir.calculation_type = new.get("calculation_type")
+        edir.initial_value = new.get("initial_value")
+        edir.tolerance_days = new.get("tolerance_days")
+        penalty.incremental = new.get("incremental")
+        edir.increment_interval_days = new.get("increment_interval_days")
+        edir.increment_value = new.get("increment_value")
+        edir.maximum_penalty = new.get("maximum_penalty")
+        edir.percentage_base = new.get("percentage_base")
+        edir.updated_date = timezone.now()
+        edir.save()
+        
+        change.status = "APPROVED"
+        change.checker = checker
+        change.approved_at = timezone.now()
+        change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Penality {change.action} request Approved.".upper(),
+            message=f"Dear {change.maker.full_name}, Your edir {edir.name} penality {change.action.lower()} request was approved by {checker.full_name}. ",
+            reference_id = change.id,
+            notification_type="Penality",
+        )
+        audit_log(
+            action=f"APPROVE_{change.action}_PENALTY",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "edir_id": edir.id,
+                "checker_user_id": checker.id
+            }
+        )
+        return Response({"message": "Approved successfully"}, status=status.HTTP_200_OK)
+    except PenaltyConfigurationChangeRequest.DoesNotExist:
+        return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="UPDATE_PENALTY_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback":traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def reject_penality(request, id):
+    try:
+        change = PenaltyConfigurationChangeRequest.objects.get(id=id)
+        reason = request.data.get('reason')
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # edir = change.edir
+        change.status = "REJECTED"
+        change.checker = checker
+        change.comment = reason
+        change.approved_at = timezone.now()
+        change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Penality {change.action} request rejected.",
+            message=f"Dear {change.maker.full_name}, Your edir penalty {change.action.lower()} request was rejected by {checker.full_name} with reason {reason}. ",
+            reference_id = change.id,
+            notification_type="Penalty",
+        )
+        audit_log(
+            action="REJECT_PENALTY",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return Response({"message": "Rejected successfully"},status=status.HTTP_200_OK)
+    except PenaltyConfigurationChangeRequest.DoesNotExist:
+        return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="REJECT_PENALTY_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()}
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+
+@api_view(["PUT"])
+@permission_classes([IsAuthenticated])
+def cancel_penality(request, id):
+    try:
+        change = PenaltyConfigurationChangeRequest.objects.get(id=id)
+        checker = EdirUser.objects.filter(
+            user=request.user,
+            edir=change.edir,
+            status="Active"
+        ).first()
+        if change.status != "PENDING":
+            return Response(
+                {"error": "Already processed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # edir = change.edir
+        change.status = "CANCELLED"
+        change.checker = checker
+        change.approved_at = timezone.now()
+        change.save()
+        create_notification(
+            user=change.maker,
+            title=f"Penality {change.action} request cancelled.",
+            message=f"Dear {change.maker.full_name}, Your edir penalty {change.action.lower()} request was cancelled successfully. ",
+            reference_id = change.id,
+            notification_type="Penalty",
+        )
+        audit_log(
+            action="CANCEL_PENALTY",
+            request=request,
+            status="SUCCESS",
+            request_data=request.data,
+            extra_data={
+                "request_id": id,
+                "checker_user_id": checker.id
+            }
+        )
+        return Response(
+            {"message": "Edir request Cancelled successfully"},status=status.HTTP_200_OK)
+    except PenaltyConfigurationChangeRequest.DoesNotExist:
+        return Response({"error": "Change request not found"},status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        audit_log(
+            action="CANCEL_PENALTY_REQUEST",
+            request=request,
+            status="FAILED",
+            request_data=request.data,
+            extra_data={"request_id": id,
+                        "user_id": request.user.id,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()
+                        }
+        )
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 
 @api_view(['POST'])
 def add_bank(request, edir_id):
@@ -5012,7 +5268,7 @@ def admin_receive_cashes(request, edir_id):
         # 3. update fee assignment transaction request and create fee_assignment_transaction_request
         for fee in fees_data:
             fee_assignment = FeeAssignment.objects.filter(
-                fee_id=fee,
+                id=fee.get("assignment_id"),
                 user=member,
                 status="Active",
             ).first()
@@ -5024,13 +5280,34 @@ def admin_receive_cashes(request, edir_id):
                 )
                 fee_assignment.transaction_change_request = trx_request
                 fee_assignment.save()
-        fee_ids = [f["id"] for f in fees_data] if isinstance(fees_data, str) else fees_data
+        fee_ids = [f["assignment_id"] for f in fees_data] if isinstance(fees_data, str) else fees_data
         # 4. update fee assignment transaction
         for fee_id in fee_ids:
-            fee_assign = FeeAssignment.objects.get(fee_id=fee_id, user = member, transaction__isnull=True)
+            fee_assign = FeeAssignment.objects.get(id=fee.get("assignment_id"), user = member, transaction__isnull=True)
             fee_assign.updated_date = timezone.now()
             fee_assign.transaction = trx
             fee_assign.save()   
+
+            penalty_amount = Decimal(str(fee.get("penalty", "0")))
+            FeePenalty.objects.update_or_create(
+                fee_assignment=fee_assign,
+                defaults={
+                    "calculation_type": (
+                        edir.penalty_configuration.calculation_type
+                        if edir.penalty_configuration
+                        else ""
+                    ),
+                    "base_amount": Decimal(str(fee.get("amount", "0"))),
+                    # "penalty_rate": (
+                    #     edir.penalty_configuration.penalty_rate
+                    #     if edir.penalty_configuration
+                    #     else None
+                    # ),
+                    "penalty_amount": penalty_amount,
+                    "days_late": fee.get("days_late",0),
+                    "penalty_days": fee.get("penalty_days",0),
+                    "increment_count": fee.get("increment_count",0),
+                })
         audit_log(
             action="ADMIN_RECEIVE_CASHES",
             request=request,
@@ -5094,7 +5371,7 @@ def deposit_payments(request, edir_id):
             payment_method="CASH",
             bank_id=bank_id,
             image=image,
-            user=maker,
+            checker=maker,
         )
         # deposit_request = DepositChangeRequest.objects.create(
         #     edir=edir,
@@ -5191,7 +5468,7 @@ def update_pay_fees(request, edir_id):
         )
         for fee in fees_data:
             fee_assignment = FeeAssignment.objects.filter(
-                fee_id=fee,
+                id=fee.get("assignment_id"),
                 user=user,
                 status="Active",
             ).first()
@@ -5457,7 +5734,7 @@ def approve_payments(request, id):
                     penalty_amount = Decimal(str(fee.get("penalty", "0")))
                     total_amount = Decimal(str(fee.get("total_amount", "0")))
                     fee_assign = FeeAssignment.objects.filter(id=fee.get("assignment_id"), user = change.user, transaction__isnull=True).first()
-                    print(f"fee_assign: {fee_assign}")
+                    # print(f"fee_assign: {fee_assign}")
                     if fee_assign:
                         fee_assign.updated_date = timezone.now()
                         fee_assign.transaction = trx
@@ -5478,7 +5755,6 @@ def approve_payments(request, id):
                                 #     else None
                                 # ),
                                 "penalty_amount": penalty_amount,
-                                # "total_amount": Decimal(str(fee.get("total_amount", "0"))),
                                 "days_late": fee.get("days_late",0),
                                 "penalty_days": fee.get("penalty_days",0),
                                 "increment_count": fee.get("increment_count",0),
