@@ -55,8 +55,8 @@ urlpatterns = [
     path("edir/reject/<int:id>/", views.reject_edir, name="reject_edir_edit"),
     path("edir/cancel/<int:id>/", views.cancel_edir, name="cancel-edir"),
     path("edir/<int:pk>/update_meeting/", views.update_meeting_date, name="update-meeting-date"),
-    path("edirs/<int:edir_id>/penalty/", views.edir_penalty_configuration,name="edir-penalty-configuration"),
-
+    
+    path("edir/<int:edir_id>/penalty/", views.edir_penalty_configuration,name="edir-penalty-configuration"),
     path("penalty/update/<int:edir_id>/", views.update_penalty, name="update-penalty"),
     path("penalty/approve/<int:id>/", views.approve_penality, name="approve_penalty_edit"),
     path("penalty/reject/<int:id>/", views.reject_penality, name="reject_penalty_edit"),
@@ -141,6 +141,11 @@ urlpatterns = [
     path("notification/<int:id>/",views.read_notification, name="read-notification"),
     path("notifications/read-all/<int:user_id>/",views.mark_all_as_read,name="mark-all-as-read"),
 
+    path(
+        "reports/member-fee-status/<int:edir_id>/",
+        views.member_fee_status_report,
+        name="member-fee-status-report",
+    ),
 ]
 
 if settings.DEBUG:

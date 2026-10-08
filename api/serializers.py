@@ -2,7 +2,7 @@ from urllib import request
 
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer, UserSerializer as BaseUserSerializer
 from rest_framework import serializers
-from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification, PenaltyConfiguration, FeePenalty
+from .models import CustomUser, Deposit, EdirChangeRequest, Family, Edir, FamilyChangeRequest, Fee, FeeAssignment, Bank, EdirUser, EdirUserChangeRequest, Help, Event, IncomeChangeRequest, PenaltyConfigurationChangeRequest, Transaction, BankChangeRequest, ExpenseChangeRequest, FeeChangeRequest, TransactionChangeRequest, Notification, PenaltyConfiguration, FeePenalty
 from django.db.models import Sum
 from django.contrib.auth import password_validation
 
@@ -215,9 +215,7 @@ class FamilyChangeRequestSerializer(serializers.ModelSerializer):
         ]
 
 
-class PenaltyConfigurationSerializer(
-    serializers.ModelSerializer
-):
+class PenaltyConfigurationSerializer(serializers.ModelSerializer):
     class Meta:
         model = PenaltyConfiguration
 
@@ -365,6 +363,31 @@ class EdirChangeRequestSerializer(serializers.ModelSerializer):
             "maker",
             "created_at",
         ]
+
+
+class PenaltyConfigurationChangeRequestSerializer(serializers.ModelSerializer):
+    maker = SimpleEdirUserSerializer(read_only=True)
+    edir = EdirSerializer(read_only=True)
+    penalty = PenaltyConfigurationSerializer(read_only=True)
+
+    created_at = serializers.DateTimeField(
+        format="%Y-%m-%d %H:%M:%S",
+        read_only=True
+    )
+
+    class Meta:
+        model = PenaltyConfigurationChangeRequest
+        fields = [
+            "id",
+            "edir",
+            "penalty",
+            "action",
+            "new_value",
+            "old_value",
+            "maker",
+            "created_at",
+        ]
+
 
 class BankSerializer(serializers.ModelSerializer):
     class Meta:
@@ -1091,7 +1114,7 @@ class UndepositedTransactionSerializer(serializers.ModelSerializer):
 
 # Dashboard
 class PaymentSerializer(serializers.ModelSerializer):
-    fees = serializers.SerializerMethodField()
+    fees = FeeAssignmentSerializer(source="feeassignment_trx", many=True)
 
     class Meta:
         model = Transaction
@@ -1105,26 +1128,26 @@ class PaymentSerializer(serializers.ModelSerializer):
             "fees",
         ]
 
-    def get_fees(self, obj):
-        fees = []
+    # def get_fees(self, obj):
+    #     fees = []
 
-        for assignment in obj.feeassignment_trx.all():
-            fee = assignment.fee
+    #     for assignment in obj.feeassignment_trx.all():
+    #         fee = assignment.fee
 
-            if fee:
-                fees.append({
-                    "id": fee.id,
-                    "name": fee.name,
-                    "category": fee.category,
-                    "amount": fee.amount,
-                    "supported_member": (
-                        fee.supported_member.full_name
-                        if fee.supported_member
-                        else None
-                    ),
-                })
+    #         if fee:
+    #             fees.append({
+    #                 "id": fee.id,
+    #                 "name": fee.name,
+    #                 "category": fee.category,
+    #                 "amount": fee.amount,
+    #                 "supported_member": (
+    #                     fee.supported_member.full_name
+    #                     if fee.supported_member
+    #                     else None
+    #                 ),
+    #             })
 
-        return fees
+    #     return fees
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)

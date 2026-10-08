@@ -676,12 +676,7 @@ class PenaltyConfiguration(models.Model):
         default=FLAT
     )
 
-    initial_value = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0
-    )
-
+    initial_value = models.PositiveIntegerField(default=0)
     tolerance_days = models.PositiveIntegerField(default=0)
     incremental = models.BooleanField(default=False)
     increment_interval_days = models.PositiveIntegerField(
@@ -689,16 +684,12 @@ class PenaltyConfiguration(models.Model):
         blank=True
     )
 
-    increment_value = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
+    increment_value = models.PositiveIntegerField(
         null=True,
         blank=True
     )
 
-    maximum_penalty = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
+    maximum_penalty = models.PositiveIntegerField(
         null=True,
         blank=True
     )
