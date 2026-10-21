@@ -146,6 +146,17 @@ urlpatterns = [
         views.member_fee_status_report,
         name="member-fee-status-report",
     ),
+    path(
+        "reports/payment-details/<int:edir_id>/",
+        views.payment_details_report,
+        name="payment-details-report",
+    ),
+    path(
+        "edirs/<int:edir_id>/reports/financial-summary/",
+        views.financial_summary_report,
+        name="financial-summary-report",
+    ),
+    path("auth/verify-pin/",views.verify_pin, name="verify-pin"),
 ]
 
 if settings.DEBUG:

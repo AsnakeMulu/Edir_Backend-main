@@ -31,7 +31,7 @@ from core.penality_services import calculate_penalty
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib.pagesizes import A3, landscape
+from reportlab.lib.pagesizes import A3, A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
@@ -3312,7 +3312,8 @@ def approve_expense (request, id):
                 payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
-                user=checker,
+                maker = change.maker,
+                checker=checker,
             )
             # 3. create transaction
             trx = Transaction.objects.create(
@@ -3387,7 +3388,8 @@ def approve_expense (request, id):
                 payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
-                user=checker,
+                maker = change.maker,
+                checker=checker,
             )
             # 3. create new transaction
             trx = Transaction.objects.create(
@@ -3500,7 +3502,7 @@ def approve_expense (request, id):
         return JsonResponse({"error": "Expense request is not found "}, status=404)
     except Exception as e:
         audit_log(
-            action="DISABLE_EXPENSE_REQUEST",
+            action=f"APPROVE_{change.action}_REQUEST",
             request=request,
             status="FAILED",
             request_data=request.data,
@@ -3911,7 +3913,8 @@ def approve_income (request, id):
                 payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
-                user=checker,
+                maker=change.maker,
+                checker=checker,
             )
             # 3. create transaction
             trx = Transaction.objects.create(
@@ -3978,7 +3981,8 @@ def approve_income (request, id):
                 payment_method= payment_method,
                 bank_id=bank_id,
                 # image=image,
-                user=checker,
+                checker=checker,
+                maker=change.maker,
             )
             # 3. craete transaction
             trx = Transaction.objects.create(
@@ -4879,7 +4883,14 @@ def get_unpaid_fees(request, user_id):
                 "fee_name": assignment.fee.name,
                 "category": assignment.fee.category,
                 "amount": str(fee_amount),
-
+                "supported_member": (
+                    {
+                        "id": assignment.fee.supported_member.id,
+                        "full_name": str(assignment.fee.supported_member.full_name),
+                    }
+                    if assignment.fee.supported_member
+                    else None
+                ),
                 # Penalty information
                 "penalty": str(penalty),
                 "penalty_days": result["penalty_days"],
@@ -5245,6 +5256,9 @@ def make_transfer(request, edir_id):
                         "traceback": traceback.format_exc()}
         )
         return Response({"error": "Internal server error"},status=500)
+from decimal import Decimal
+from django.db import transaction
+from django.utils import timezone
 
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
@@ -5254,82 +5268,146 @@ def admin_receive_cashes(request, edir_id):
         total_amount = request.data.get("total_amount")
         method = request.data.get("method")
         fees_data = request.data.get("fees", [])
-        fees_data = json.loads(fees_data) if isinstance(fees_data, str) else fees_data
-        data = {
-            "fees": fees_data,
-            "bank": request.data.get("bank"),
-            "total_amount": request.data.get("total_amount"),
-            "method": request.data.get("method"),
-        }
-        edir = Edir.objects.get(id=edir_id)
-        member = EdirUser.objects.get(id=user_id)
-        maker = EdirUser.objects.filter(
-            user=request.user,
-            edir=edir,
-            status="Active"
-        ).only("id").first()
-        # 1. create transaction
-        trx = Transaction.objects.create(
-            transaction_type="PAYMENT",
-            amount=total_amount,
-            payment_method=method,
-            edir=edir,
-            user=member,
-            payment_status="PAID"
-        )
-        # 2. transaction request created
-        trx_request = TransactionChangeRequest.objects.create(
-            edir=edir,
-            user=member,
-            trx=trx,
-            action="CREATE",
-            new_value=data,
-            maker=maker,
-            status="PAID",
-        )
-        # 3. update fee assignment transaction request and create fee_assignment_transaction_request
-        for fee in fees_data:
-            fee_assignment = FeeAssignment.objects.filter(
-                id=fee.get("assignment_id"),
-                user=member,
+
+        if isinstance(fees_data, str):
+            fees_data = json.loads(fees_data)
+
+        if not isinstance(fees_data, list) or not fees_data:
+            return Response(
+                {"error": "Please select at least one fee."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            edir = Edir.objects.get(id=edir_id)
+
+            member = EdirUser.objects.get(
+                id=user_id,
+                edir=edir,
                 status="Active",
+            )
+
+            maker = EdirUser.objects.filter(
+                user=request.user,
+                edir=edir,
+                status="Active",
+                is_committee=True,
             ).first()
 
-            if fee_assignment:
+            if not maker:
+                return Response(
+                    {"error": "Active committee membership required."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Validate all assignments before creating the transaction.
+            assignment_ids = [
+                fee.get("assignment_id")
+                for fee in fees_data
+            ]
+
+            if len(assignment_ids) != len(set(assignment_ids)):
+                return Response(
+                    {"error": "Duplicate fee assignments were submitted."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            assignments = {}
+
+            for assignment_id in assignment_ids:
+                assignment = FeeAssignment.objects.select_for_update().filter(
+                    id=assignment_id,
+                    user=member,
+                    fee__edir=edir,
+                    status="Active",
+                    transaction__isnull=True,
+                ).first()
+
+                if not assignment:
+                    return Response(
+                        {
+                            "error": (
+                                f"Fee assignment {assignment_id} was not found, "
+                                "does not belong to this member, or has already "
+                                "been paid/assigned to a transaction."
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                assignments[str(assignment_id)] = assignment
+
+            data = {
+                "fees": fees_data,
+                "bank": request.data.get("bank"),
+                "total_amount": total_amount,
+                "method": method,
+            }
+
+            trx = Transaction.objects.create(
+                transaction_type="PAYMENT",
+                amount=total_amount,
+                payment_method=method,
+                edir=edir,
+                user=member,
+                payment_status="Paid",
+            )
+
+            trx_request = TransactionChangeRequest.objects.create(
+                edir=edir,
+                user=member,
+                trx=trx,
+                action="CREATE",
+                new_value=data,
+                maker=maker,
+                status="CREATED",
+            )
+
+            penalty_config = getattr(
+                edir, "penalty_configuration", None
+            )
+
+            for fee in fees_data:
+                assignment = assignments[str(fee["assignment_id"])]
+
                 FeeAssignmentTrxChangeRequest.objects.create(
-                    fee_assignment=fee_assignment,
+                    fee_assignment=assignment,
                     trx_change_request=trx_request,
                 )
-                fee_assignment.transaction_change_request = trx_request
-                fee_assignment.save()
-        fee_ids = [f["assignment_id"] for f in fees_data] if isinstance(fees_data, str) else fees_data
-        # 4. update fee assignment transaction
-        for fee_id in fee_ids:
-            fee_assign = FeeAssignment.objects.get(id=fee.get("assignment_id"), user = member, transaction__isnull=True)
-            fee_assign.updated_date = timezone.now()
-            fee_assign.transaction = trx
-            fee_assign.save()   
 
-            penalty_amount = Decimal(str(fee.get("penalty", "0")))
-            FeePenalty.objects.update_or_create(
-                fee_assignment=fee_assign,
-                defaults={
-                    "calculation_type": (
-                        edir.penalty_configuration.calculation_type
-                        if edir.penalty_configuration
-                        else ""
-                    ),
-                    "base_amount": Decimal(str(fee.get("amount", "0"))),
-                    # "penalty_rate": (
-                    #     edir.penalty_configuration.penalty_rate
-                    #     if edir.penalty_configuration
-                    #     else None
-                    # ),
-                    "penalty_amount": penalty_amount,
-                    "days_late": fee.get("days_late",0),
-                    "penalty_days": fee.get("penalty_days",0),
-                    "increment_count": fee.get("increment_count",0),
-                })
+                assignment.transaction_change_request = trx_request
+                assignment.transaction = trx
+                assignment.updated_date = timezone.now()
+                assignment.save(
+                    update_fields=[
+                        "transaction_change_request",
+                        "transaction",
+                        "updated_date",
+                    ]
+                )
+
+                FeePenalty.objects.update_or_create(
+                    fee_assignment=assignment,
+                    defaults={
+                        "calculation_type": (
+                            penalty_config.calculation_type
+                            if penalty_config
+                            else ""
+                        ),
+                        "base_amount": Decimal(
+                            str(fee.get("amount", "0"))
+                        ),
+                        "penalty_amount": Decimal(
+                            str(fee.get("penalty", "0"))
+                        ),
+                        "days_late": int(fee.get("days_late", 0)),
+                        "penalty_days": int(fee.get("penalty_days", 0)),
+                        "increment_count": int(
+                            fee.get("increment_count", 0)
+                        ),
+                    },
+                )
+
         audit_log(
             action="ADMIN_RECEIVE_CASHES",
             request=request,
@@ -5337,32 +5415,53 @@ def admin_receive_cashes(request, edir_id):
             request_data=request.data,
             extra_data={
                 "edir_id": edir_id,
-                "user_id": user_id,
-                "maker_user_id": maker.id
-            }
+                "member_id": member.id,
+                "maker_user_id": maker.id,
+            },
         )
-        return Response({'message': 'cash payment added by committee member'}, status=status.HTTP_201_CREATED)
-    
+
+        return Response(
+            {"message": "Cash payment added by committee member."},
+            status=status.HTTP_201_CREATED,
+        )
+
     except Edir.DoesNotExist:
-        return Response({'error': 'edir not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "Edir not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
     except EdirUser.DoesNotExist:
-        return Response({'error': 'edir user not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "Edir member not found in this edir."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+        return Response(
+            {"error": f"Invalid payment data: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     except Exception as e:
         audit_log(
             action="ADMIN_RECEIVE_CASHES",
             request=request,
             status="FAILED",
             request_data=request.data,
-            extra_data={"edir_id": edir_id,
-                        "user_id": request.user.id,
-                        "error": str(e),
-                        "traceback": traceback.format_exc()}
-        )
-        return Response(
-            {"error": "Internal server error"},
-            status=500,
+            extra_data={
+                "edir_id": edir_id,
+                "member_id": request.data.get("userId"),
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            },
         )
 
+        return Response(
+            {"error": "Internal server error."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def deposit_payments(request, edir_id):
@@ -6504,1185 +6603,1061 @@ def logout(request):
         return Response({"message": "Logged out"}, status=status.HTTP_205_RESET_CONTENT)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+from pathlib import Path
+
+# from datetime import datetime, date
+# from io import BytesIO
+
+from django.http import HttpResponse
+# from django.utils import timezone
+from django.utils.dateparse import parse_date
+# from django.db.models import Q
+
+# from rest_framework.decorators import api_view, permission_classes
+# from rest_framework.permissions import IsAuthenticated
+# from rest_framework.response import Response
+# from rest_framework import status
+
+# from reportlab.lib import colors
+# from reportlab.lib.enums import TA_CENTER, TA_LEFT
+# from reportlab.lib.pagesizes import A3, landscape
+# from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+# from reportlab.lib.units import mm
+# from reportlab.platypus import (
+#     SimpleDocTemplate,
+#     Table,
+#     TableStyle,
+#     Paragraph,
+#     Spacer,
+#     KeepTogether,
+# )
+
+# from .models import EdirUser, Fee, FeeAssignment, Transaction
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def parse_report_dates(request):
-    """
-    Read from_date and to_date.
-    Maximum allowed period = 1 year.
-    """
-
-    from_date_str = request.query_params.get("from_date")
-    to_date_str = request.query_params.get("to_date")
-
-    if not from_date_str or not to_date_str:
-        raise ValueError(
-            "from_date and to_date are required."
-        )
-
-    try:
-        from_date = datetime.strptime(
-            from_date_str, "%Y-%m-%d"
-        ).date()
-
-        to_date = datetime.strptime(
-            to_date_str, "%Y-%m-%d"
-        ).date()
-
-    except ValueError:
-        raise ValueError(
-            "Date must use YYYY-MM-DD format."
-        )
-
-    if from_date > to_date:
-        raise ValueError(
-            "From date cannot be after to date."
-        )
-
-    # Maximum one year.
-    # Allow exactly one calendar year.
-    if to_date > from_date.replace(
-        year=from_date.year + 1
-    ):
-        raise ValueError(
-            "The report period cannot exceed one year."
-        )
-
-    return from_date, to_date
-
-
-def format_date(value):
-    if not value:
-        return ""
-
-    if hasattr(value, "date"):
-        value = value.date()
-
-    return value.strftime("%d/%m/%Y")
-
-
-def get_fee_column_name(fee):
-    """
-    Dynamic column name.
-
-    Examples:
-        Sep 2026
-        Funeral Contribution for Kebede
-        Registration Fee
-    """
-
-    category = (fee.category or "").strip()
-
-    special_categories = [
-        "Funeral Contribution",
-        "Sickness Support",
-        "Donation Contribution",
-    ]
-
-    if category in special_categories:
-
-        supported_member = getattr(
-            fee,
-            "supported_member",
-            None,
-        )
-
-        if supported_member:
-            return (
-                f"{category} for "
-                f"{supported_member.full_name}"
-            )
-
-        return category
-
-    # Normal fee
-    if fee.name:
-        return fee.name
-
-    return category
-
-
-def get_payment_date(transaction):
-    """
-    Use payment_date if your Transaction model has it.
-    Otherwise fall back to created_at.
-
-    Change this function if your exact Transaction
-    model uses another payment date field.
-    """
-
-    payment_date = getattr(
-        transaction,
-        "payment_date",
-        None,
-    )
-
-    if payment_date:
-        return payment_date
-
-    return getattr(
-        transaction,
-        "created_at",
-        None,
-    )
-
-
-def get_bank_name(transaction):
-    """
-    Transaction normally points to Deposit/Bank in your
-    payment architecture.
-
-    Adjust only this helper if your Transaction serializer
-    exposes the bank differently.
-    """
-
-    bank = getattr(
-        transaction,
-        "bank",
-        None,
-    )
-
-    if bank:
-        return getattr(
-            bank,
-            "bank_name",
-            getattr(bank, "name", ""),
-        )
-
-    deposit = getattr(
-        transaction,
-        "deposit",
-        None,
-    )
-
-    if deposit:
-        bank = getattr(
-            deposit,
-            "bank",
-            None,
-        )
-
-        if bank:
-            return getattr(
-                bank,
-                "bank_name",
-                getattr(bank, "name", ""),
-            )
-
-    return ""
-
-
-def get_payment_method(transaction):
-    return (
-        getattr(
-            transaction,
-            "payment_method",
-            "",
-        )
-        or ""
-    )
-
-
-def get_payment_amount(fee_assignment):
-    """
-    Use transaction amount when available.
-
-    If one Transaction contains several fees, using the
-    transaction total here would be wrong. Therefore we
-    prefer the fee assignment's own amount if available.
-    """
-
-    transaction = fee_assignment.transaction
-
-    assignment_amount = getattr(
-        fee_assignment,
-        "amount",
-        None,
-    )
-
-    if assignment_amount is not None:
-        return Decimal(str(assignment_amount))
-
-    fee = fee_assignment.fee
-
-    if fee and fee.amount is not None:
-        return Decimal(str(fee.amount))
-
-    if transaction:
-        return Decimal(
-            str(
-                getattr(
-                    transaction,
-                    "amount",
-                    0,
-                )
-                or 0
-            )
-        )
-
-    return Decimal("0")
-
-
-def get_cell_payment(fee_assignment):
-    """
-    Returns the information that should appear inside
-    one matrix cell.
-
-    NO "Paid" label.
-    NO reference number.
-    """
-
-    transaction = fee_assignment.transaction
-
-    if not transaction:
-        return "—"
-
-    # Only successful/paid transactions.
-    payment_status = getattr(
-        transaction,
-        "payment_status",
-        "",
-    )
-
-    if payment_status and str(payment_status).upper() not in [
-        "PAID",
-        "APPROVED",
-    ]:
-        return "—"
-
-    amount = get_payment_amount(
-        fee_assignment
-    )
-
-    payment_date = get_payment_date(
-        transaction
-    )
-
-    method = get_payment_method(
-        transaction
-    )
-
-    bank = get_bank_name(
-        transaction
-    )
-
-    amount_text = (
-        f"{amount:,.2f} ETB"
-    )
-
-    date_text = format_date(
-        payment_date
-    )
-
-    if method.upper() == "TRANSFER" and bank:
-        method_text = f"Transfer - {bank}"
-    else:
-        method_text = "Cash"
-
-    return (
-        f"{amount_text}<br/>"
-        f"{date_text}<br/>"
-        f"{method_text}"
-    )
-
-
-# ---------------------------------------------------------
-# Permission
-# ---------------------------------------------------------
-
-def get_active_committee_member(
-    request,
-    edir_id,
-):
-    try:
-        edir = Edir.objects.get(
-            id=edir_id
-        )
-    except Edir.DoesNotExist:
-        return None, Response(
-            {"error": "Edir not found."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    membership = EdirUser.objects.filter(
-        edir=edir,
-        user=request.user,
-        status="Active",
-    ).first()
-
-    if not membership:
-        return None, Response(
+    """Validate from_date/to_date and enforce a maximum range of one year."""
+    from_date_raw = request.query_params.get("from_date")
+    to_date_raw = request.query_params.get("to_date")
+
+    if not from_date_raw or not to_date_raw:
+        return None, None, Response(
             {
-                "error":
-                    "You are not an active member "
-                    "of this edir."
-            },
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    # Your existing system uses is_committee.
-    if not membership.is_committee:
-        return None, Response(
-            {
-                "error":
-                    "You do not have permission "
-                    "to generate this report."
-            },
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    return edir, None
-
-
-# ---------------------------------------------------------
-# PDF styles
-# ---------------------------------------------------------
-
-def report_styles():
-
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle(
-        "ReportTitle",
-        parent=styles["Title"],
-        fontSize=18,
-        leading=22,
-        alignment=TA_CENTER,
-        spaceAfter=8,
-    )
-
-    subtitle_style = ParagraphStyle(
-        "ReportSubtitle",
-        parent=styles["Normal"],
-        fontSize=9,
-        leading=12,
-        alignment=TA_CENTER,
-        spaceAfter=12,
-    )
-
-    header_style = ParagraphStyle(
-        "Header",
-        parent=styles["Normal"],
-        fontSize=8,
-        leading=10,
-        alignment=TA_CENTER,
-        textColor=colors.white,
-    )
-
-    cell_style = ParagraphStyle(
-        "Cell",
-        parent=styles["Normal"],
-        fontSize=7,
-        leading=9,
-        alignment=TA_CENTER,
-    )
-
-    member_style = ParagraphStyle(
-        "Member",
-        parent=styles["Normal"],
-        fontSize=8,
-        leading=10,
-        alignment=TA_LEFT,
-    )
-
-    return (
-        title_style,
-        subtitle_style,
-        header_style,
-        cell_style,
-        member_style,
-    )
-
-
-def pdf_header(
-    elements,
-    title,
-    edir,
-    from_date,
-    to_date,
-):
-
-    (
-        title_style,
-        subtitle_style,
-        _,
-        _,
-        _,
-    ) = report_styles()
-
-    elements.append(
-        Paragraph(
-            title,
-            title_style,
-        )
-    )
-
-    elements.append(
-        Paragraph(
-            f"<b>{edir.name}</b>",
-            subtitle_style,
-        )
-    )
-
-    elements.append(
-        Paragraph(
-            f"Period: "
-            f"{from_date.strftime('%d/%m/%Y')} - "
-            f"{to_date.strftime('%d/%m/%Y')}",
-            subtitle_style,
-        )
-    )
-
-    elements.append(
-        Spacer(1, 5 * mm)
-    )
-
-
-# ---------------------------------------------------------
-# Report 1
-# Member Fee Status
-# ---------------------------------------------------------
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def member_fee_status_report(
-    request,
-    edir_id,
-):
-
-    try:
-
-        from_date, to_date = parse_report_dates(
-            request
-        )
-
-        edir, permission_error = (
-            get_active_committee_member(
-                request,
-                edir_id,
-            )
-        )
-
-        if permission_error:
-            return permission_error
-
-        # -------------------------------------------------
-        # Get active members
-        # -------------------------------------------------
-
-        members = list(
-            EdirUser.objects.filter(
-                edir=edir,
-                status="Active",
-            )
-            .select_related("user")
-            .order_by(
-                "user__full_name"
-            )
-        )
-
-        # -------------------------------------------------
-        # Get fee assignments
-        #
-        # IMPORTANT:
-        # If your fee assignment uses another date field
-        # for the fee period, change created_at here.
-        # -------------------------------------------------
-
-        assignments = (
-            FeeAssignment.objects.filter(
-                user__edir=edir,
-                user__status="Active",
-                created_at__date__gte=from_date,
-                created_at__date__lte=to_date,
-            )
-            .select_related(
-                "user__user",
-                "fee",
-                "fee__supported_member",
-                "transaction",
-            )
-            .order_by(
-                "fee__id",
-                "user__user__full_name",
-            )
-        )
-
-        # -------------------------------------------------
-        # Dynamic fee columns
-        # -------------------------------------------------
-
-        columns = []
-
-        column_map = {}
-
-        for assignment in assignments:
-
-            column_name = get_fee_column_name(
-                assignment.fee
-            )
-
-            if column_name not in column_map:
-
-                column_map[
-                    column_name
-                ] = len(columns)
-
-                columns.append(
-                    {
-                        "name": column_name,
-                        "fee_id": assignment.fee_id,
-                    }
-                )
-
-        # -------------------------------------------------
-        # Matrix
-        # -------------------------------------------------
-
-        matrix = {}
-
-        for member in members:
-
-            matrix[member.id] = {
-                "member": member,
-                "fees": {},
-            }
-
-        for assignment in assignments:
-
-            if assignment.user_id not in matrix:
-                continue
-
-            column_name = get_fee_column_name(
-                assignment.fee
-            )
-
-            # If several assignment records exist for
-            # the same member/fee, use the paid one.
-            current = matrix[
-                assignment.user_id
-            ]["fees"].get(column_name)
-
-            value = get_cell_payment(
-                assignment
-            )
-
-            if current is None:
-                matrix[
-                    assignment.user_id
-                ]["fees"][column_name] = value
-
-            elif current == "—" and value != "—":
-                matrix[
-                    assignment.user_id
-                ]["fees"][column_name] = value
-
-        # -------------------------------------------------
-        # PDF
-        # -------------------------------------------------
-
-        buffer = BytesIO()
-
-        document = SimpleDocTemplate(
-            buffer,
-            pagesize=landscape(A3),
-            rightMargin=8 * mm,
-            leftMargin=8 * mm,
-            topMargin=10 * mm,
-            bottomMargin=10 * mm,
-            title="Member Fee Status Report",
-        )
-
-        elements = []
-
-        pdf_header(
-            elements,
-            "MEMBER FEE STATUS REPORT",
-            edir,
-            from_date,
-            to_date,
-        )
-
-        (
-            _,
-            _,
-            header_style,
-            cell_style,
-            member_style,
-        ) = report_styles()
-
-        # Header
-        header = [
-            Paragraph(
-                "#",
-                header_style,
-            ),
-            Paragraph(
-                "Member",
-                header_style,
-            ),
-        ]
-
-        for column in columns:
-
-            header.append(
-                Paragraph(
-                    column["name"],
-                    header_style,
-                )
-            )
-
-        header.append(
-            Paragraph(
-                "Total",
-                header_style,
-            )
-        )
-
-        table_data = [
-            header
-        ]
-
-        # -------------------------------------------------
-        # Member rows
-        # -------------------------------------------------
-
-        for index, member in enumerate(
-            members,
-            start=1,
-        ):
-
-            row = [
-                Paragraph(
-                    str(index),
-                    cell_style,
-                ),
-                Paragraph(
-                    member.user.full_name,
-                    member_style,
-                ),
-            ]
-
-            total = Decimal("0")
-
-            member_fees = matrix[
-                member.id
-            ]["fees"]
-
-            for column in columns:
-
-                value = member_fees.get(
-                    column["name"],
-                    "—",
-                )
-
-                row.append(
-                    Paragraph(
-                        value,
-                        cell_style,
-                    )
-                )
-
-                # Extract amount from a paid cell
-                if value != "—":
-                    try:
-                        amount_text = (
-                            value
-                            .split("<br/>")[0]
-                            .replace(
-                                "ETB",
-                                ""
-                            )
-                            .replace(
-                                ",",
-                                ""
-                            )
-                            .strip()
-                        )
-
-                        total += Decimal(
-                            amount_text
-                        )
-
-                    except Exception:
-                        pass
-
-            row.append(
-                Paragraph(
-                    f"{total:,.2f} ETB",
-                    cell_style,
-                )
-            )
-
-            table_data.append(row)
-
-        # -------------------------------------------------
-        # Table
-        # -------------------------------------------------
-
-        number_of_columns = (
-            len(header)
-        )
-
-        member_width = 42 * mm
-        number_width = 8 * mm
-        total_width = 25 * mm
-
-        available_width = (
-            landscape(A3)[0]
-            - 16 * mm
-            - member_width
-            - number_width
-            - total_width
-        )
-
-        fee_width = (
-            available_width
-            / max(len(columns), 1)
-        )
-
-        col_widths = [
-            number_width,
-            member_width,
-        ]
-
-        col_widths.extend(
-            [
-                max(fee_width, 25 * mm)
-                for _ in columns
-            ]
-        )
-
-        col_widths.append(
-            total_width
-        )
-
-        table = Table(
-            table_data,
-            colWidths=col_widths,
-            repeatRows=1,
-            hAlign="LEFT",
-        )
-
-        table.setStyle(
-            TableStyle(
-                [
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (-1, 0),
-                        colors.HexColor(
-                            "#0077b6"
-                        ),
-                    ),
-                    (
-                        "TEXTCOLOR",
-                        (0, 0),
-                        (-1, 0),
-                        colors.white,
-                    ),
-                    (
-                        "FONTNAME",
-                        (0, 0),
-                        (-1, 0),
-                        "Helvetica-Bold",
-                    ),
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.35,
-                        colors.grey,
-                    ),
-                    (
-                        "VALIGN",
-                        (0, 0),
-                        (-1, -1),
-                        "MIDDLE",
-                    ),
-                    (
-                        "ALIGN",
-                        (0, 0),
-                        (-1, -1),
-                        "CENTER",
-                    ),
-                    (
-                        "ROWBACKGROUNDS",
-                        (0, 1),
-                        (-1, -1),
-                        [
-                            colors.white,
-                            colors.HexColor(
-                                "#f5f9fc"
-                            ),
-                        ],
-                    ),
-                    (
-                        "TOPPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        5,
-                    ),
-                    (
-                        "BOTTOMPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        5,
-                    ),
-                ]
-            )
-        )
-
-        elements.append(table)
-
-        document.build(elements)
-
-        buffer.seek(0)
-
-        filename = (
-            "member_fee_status_"
-            f"{from_date}_{to_date}.pdf"
-        )
-
-        return FileResponse(
-            buffer,
-            as_attachment=True,
-            filename=filename,
-            content_type="application/pdf",
-        )
-
-    except ValueError as e:
-
-        return Response(
-            {
-                "error": str(e)
+                "error": "Both from_date and to_date are required.",
+                "expected_format": "YYYY-MM-DD",
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    except Exception as e:
+    from_date = parse_date(from_date_raw)
+    to_date = parse_date(to_date_raw)
 
-        return Response(
+    if not from_date or not to_date:
+        return None, None, Response(
             {
-                "error":
-                    "Failed to generate "
-                    "member fee status report.",
-                "details": str(e),
+                "error": "Invalid date format.",
+                "expected_format": "YYYY-MM-DD",
             },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if from_date > to_date:
+        return None, None, Response(
+            {"error": "from_date cannot be later than to_date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Exactly one calendar year is permitted.
+    try:
+        max_date = from_date.replace(year=from_date.year + 1)
+    except ValueError:
+        # Handles Feb 29 when the following year is not a leap year.
+        max_date = from_date.replace(year=from_date.year + 1, day=28)
+
+    if to_date > max_date:
+        return None, None, Response(
+            {"error": "The report date range cannot exceed one year."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return from_date, to_date, None
+
+
+def get_active_committee_member(request, edir_id):
+    """Return the user's active committee membership for this edir, if any."""
+    return EdirUser.objects.filter(
+        user=request.user,
+        edir_id=edir_id,
+        status="Active",
+        is_committee=True,
+        edir__isnull=False,
+    ).select_related("edir", "user").first()
+
+
+def date_to_datetime_start(value):
+    return timezone.make_aware(
+        datetime.combine(value, datetime.min.time()),
+        timezone.get_current_timezone(),
+    )
+
+
+def date_to_datetime_end(value):
+    return timezone.make_aware(
+        datetime.combine(value, datetime.max.time()),
+        timezone.get_current_timezone(),
+    )
+
+
+def fee_column_name(fee):
+    """
+    Build the dynamic column label for a fee.
+    Monthly fee names should be stored in Fee.name (e.g. 'Sep 2026').
+    """
+    category = (fee.category or "Fee").strip()
+    name = (fee.name or "").strip()
+
+    if category == "Monthly Fee":
+        return name or fee.payment_date.strftime("%b %Y") if fee.payment_date else (name or "Monthly Fee")
+
+    if category == "Funeral Contribution":
+        supported_member_name = (
+            fee.supported_member.full_name
+            if fee.supported_member_id and fee.supported_member
+            else ""
+        )
+        if supported_member_name:
+            return f"Funeral Contribution for {supported_member_name}"
+        return name or category
+    if category == "Sickness Support":
+            supported_member_name = (
+                fee.supported_member.full_name
+                if fee.supported_member_id and fee.supported_member
+                else ""
+            )
+            if supported_member_name:
+                return f"Sickness Support for {supported_member_name}"
+            return name or category
+    if name:
+        return name
+
+    return category
+
+
+def transaction_is_paid(transaction):
+    return bool(
+        transaction
+        and transaction.transaction_type == "PAYMENT"
+        and transaction.payment_status.upper() == "PAID"
+    )
+
+
+def payment_method_display(transaction):
+    if not transaction:
+        return "—"
+
+    # Prefer the transaction's payment method, fall back to its deposit.
+    method = transaction.payment_method
+    if not method and transaction.deposit_id and transaction.deposit:
+        method = transaction.deposit.payment_method
+
+    if not method:
+        return "—"
+
+    return "Cash" if method.upper() == "CASH" else (
+        "Transfer" if method.upper() == "TRANSFER" else method
+    )
+
+
+def bank_name_display(transaction):
+    if not transaction or not transaction.deposit_id or not transaction.deposit:
+        return "—"
+
+    bank = transaction.deposit.bank
+    return bank.bank_name if bank else "—"
+
+
+def payment_date_display(transaction):
+    if not transaction:
+        return "—"
+    return timezone.localtime(transaction.created_at).strftime("%d/%m/%Y")
+
+
+def money_display(amount):
+    try:
+        return f"{amount:,.2f} ETB" if float(amount) % 1 else f"{float(amount):,.0f} ETB"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def pdf_response(buffer, filename):
+    response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+def make_pdf_table(data, col_widths=None, font_size=7, repeat_rows=1):
+    table = Table(
+        data,
+        colWidths=col_widths,
+        repeatRows=repeat_rows,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2B3945")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), font_size),
+                ("LEADING", (0, 0), (-1, -1), font_size + 2),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B8C1C8")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
+                    colors.white,
+                    colors.HexColor("#F3F6F8"),
+                ]),
+            ]
+        )
+    )
+    return table
+
+
+def get_report_fees(edir_id, from_date, to_date):
+    """
+    Select fee records created within the requested period.
+    Fee.created_date is a DateTimeField.
+    """
+    start_dt = date_to_datetime_start(from_date)
+    end_dt = date_to_datetime_end(to_date)
+
+    return list(
+        Fee.objects.filter(
+            edir_id=edir_id,
+            fee_type="Fee",
+            created_date__gte=start_dt,
+            created_date__lte=end_dt,
+        )
+        .select_related("supported_member")
+        .order_by("created_date", "id")
+    )
+
+
+def get_report_members(edir_id):
+    return list(
+        EdirUser.objects.filter(
+            edir_id=edir_id,
+            status="Active",
+        )
+        .select_related("user", "edir")
+        .order_by("full_name", "id")
+    )
+
+
+def get_assignment_map(fees, members):
+    """Map (member_id, fee_id) to its active assignment."""
+    if not fees or not members:
+        return {}
+
+    assignments = (
+        FeeAssignment.objects.filter(
+            fee_id__in=[fee.id for fee in fees],
+            user_id__in=[member.id for member in members],
+            status="Active",
+        )
+        .select_related(
+            "fee",
+            "user",
+            "transaction",
+            "transaction__deposit",
+            "transaction__deposit__bank",
+        )
+        .order_by("id")
+    )
+
+    result = {}
+    for assignment in assignments:
+        key = (assignment.user_id, assignment.fee_id)
+        # If legacy data contains duplicates, prefer an assignment with a paid transaction.
+        existing = result.get(key)
+        current_paid = transaction_is_paid(assignment.transaction)
+        existing_paid = transaction_is_paid(existing.transaction) if existing else False
+        if existing is None or (current_paid and not existing_paid):
+            result[key] = assignment
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Report 1: Member x Fee Status Matrix
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def member_fee_status_report(request, edir_id):
+    from_date, to_date, date_error = parse_report_dates(request)
+    if date_error:
+        return date_error
+
+    committee_member = get_active_committee_member(request, edir_id)
+    if not committee_member:
+        return Response(
+            {"error": "Only an active committee member of this edir can generate reports."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        fees = get_report_fees(edir_id, from_date, to_date)
+        members = get_report_members(edir_id)
+        assignment_map = get_assignment_map(fees, members)
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=10 * mm,
+            leftMargin=10 * mm,
+            topMargin=10 * mm,
+            bottomMargin=10 * mm,
+            title="Member Fee Status Report",
+            author="Edir Amba",
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "ReportTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            leading=20,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#2B3945"),
+            spaceAfter=6,
+        )
+        subtitle_style = ParagraphStyle(
+            "ReportSubtitle",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=12,
+            alignment=TA_CENTER,
+            spaceAfter=12,
+        )
+        cell_style = ParagraphStyle(
+            "Cell",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=6.5,
+            leading=8,
+            alignment=TA_LEFT,
+            wordWrap="CJK",
+        )
+        header_style = ParagraphStyle(
+            "Header",
+            parent=cell_style,
+            fontName="Helvetica-Bold",
+            textColor=colors.white,
+            alignment=TA_CENTER,
+        )
+
+        story = [
+            Paragraph("Member Fee Status Report", title_style),
+            Paragraph(
+                f"Edir: {committee_member.edir.name} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                f"Period: {from_date:%d/%m/%Y} - {to_date:%d/%m/%Y} "
+                f"&nbsp;&nbsp;|&nbsp;&nbsp; Generated: {timezone.localtime():%d/%m/%Y %H:%M}",
+                subtitle_style,
+            ),
+        ]
+
+        # A4 portrait fits at most six fee columns per page. The member identity
+        # columns are repeated on every fee-group page so each page is readable.
+        if not fees:
+            story.append(
+                Paragraph(
+                    "No fee records were created within the selected date range.",
+                    styles["Normal"],
+                )
+            )
+        elif not members:
+            story.append(
+                Paragraph("No active members were found for this edir.", styles["Normal"])
+            )
+        else:
+            page_width = A4[0] - 20 * mm
+            fixed_widths = [9 * mm, 38 * mm, 27 * mm]
+            fee_width = (page_width - sum(fixed_widths)) / 6
+            fee_groups = [fees[i:i + 6] for i in range(0, len(fees), 6)]
+
+            for group_index, fee_group in enumerate(fee_groups):
+                if group_index > 0:
+                    story.append(PageBreak())
+                    # Repeat the report heading and period on each fee-group page.
+                    story.append(Paragraph("Member Fee Status Report", title_style))
+                    story.append(
+                        Paragraph(
+                            f"Edir: {committee_member.edir.name} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                            f"Period: {from_date:%d/%m/%Y} - {to_date:%d/%m/%Y} "
+                            f"&nbsp;&nbsp;|&nbsp;&nbsp; Generated: {timezone.localtime():%d/%m/%Y %H:%M}",
+                            subtitle_style,
+                        )
+                    )
+
+                group_start = group_index * 6 + 1
+                group_end = group_start + len(fee_group) - 1
+                story.append(
+                    Paragraph(
+                        f"Fees {group_start}–{group_end} of {len(fees)}",
+                        ParagraphStyle(
+                            f"FeeGroupLabel{group_index}",
+                            parent=styles["Normal"],
+                            fontName="Helvetica-Bold",
+                            fontSize=8,
+                            leading=10,
+                            alignment=TA_CENTER,
+                            spaceAfter=5,
+                        ),
+                    )
+                )
+
+                header = [
+                    Paragraph("No.", header_style),
+                    Paragraph("Member Name", header_style),
+                    Paragraph("Phone Number", header_style),
+                ]
+                header.extend(
+                    Paragraph(str(fee_column_name(fee)).replace("&", "&amp;"), header_style)
+                    for fee in fee_group
+                )
+
+                rows = [header]
+                for index, member in enumerate(members, start=1):
+                    row = [
+                        str(index),
+                        Paragraph((member.full_name or "Unnamed member").replace("&", "&amp;"), cell_style),
+                        Paragraph((member.phone_number or "—").replace("&", "&amp;"), cell_style),
+                    ]
+                    
+                    for fee in fee_group:
+                        assignment = assignment_map.get((member.id, fee.id))
+                        if assignment is None:
+                            row.append("Not assigned")
+                            continue
+
+                        transaction = assignment.transaction
+                        if not transaction_is_paid(transaction):
+                            row.append("Not paid")
+                            continue
+
+                        method = payment_method_display(transaction)
+                        bank = bank_name_display(transaction)
+                        amount = money_display(fee.amount)
+                        paid_date = payment_date_display(transaction)
+
+                        cell_parts = [amount, paid_date, method]
+                        if bank != "—":
+                            cell_parts.append(bank)
+
+                        cell_text = "<br/>".join(cell_parts)
+                        row.append(Paragraph(cell_text, cell_style))
+
+                    rows.append(row)
+
+                col_widths = fixed_widths + [fee_width] * len(fee_group)
+                story.append(make_pdf_table(rows, col_widths, font_size=6))
+                story.append(Spacer(1, 3 * mm))
+                story.append(
+                    Paragraph(
+                        "A dash (—) means no paid transaction is recorded for that member and fee. "
+                        "Amounts shown are configured fee amounts; the current data model does "
+                        "not store a separate paid amount on each fee assignment.",
+                        styles["Italic"],
+                    )
+                )
+
+        doc.build(story)
+        filename = f"member_fee_status_edir_{edir_id}_{from_date}_{to_date}.pdf"
+        return pdf_response(buffer, filename)
+
+    except Exception:
+        # Full exception details should be logged server-side, not exposed to clients.
+        import logging
+        logging.getLogger(__name__).exception(
+            "Failed to generate member fee status report for edir_id=%s", edir_id
+        )
+        return Response(
+            {"error": "Failed to generate member fee status report."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
-# ---------------------------------------------------------
-# Report 2
-# Payment Details
-# ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Report 2: Payment Details (one row per paid fee assignment)
+# ---------------------------------------------------------------------------
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def payment_details_report(
-    request,
-    edir_id,
-):
+def payment_details_report(request, edir_id):
+    from_date, to_date, date_error = parse_report_dates(request)
+    if date_error:
+        return date_error
+
+    committee_member = get_active_committee_member(request, edir_id)
+    if not committee_member:
+        return Response(
+            {"error": "Only an active committee member of this edir can generate reports."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     try:
-
-        from_date, to_date = parse_report_dates(
-            request
-        )
-
-        edir, permission_error = (
-            get_active_committee_member(
-                request,
-                edir_id,
-            )
-        )
-
-        if permission_error:
-            return permission_error
+        start_dt = date_to_datetime_start(from_date)
+        end_dt = date_to_datetime_end(to_date)
 
         assignments = (
             FeeAssignment.objects.filter(
-                user__edir=edir,
-                user__status="Active",
-                transaction__isnull=False,
-                transaction__payment_status__in=[
-                    "Paid",
-                    "PAID",
-                    "Approved",
-                    "APPROVED",
-                ],
-                transaction__created_at__date__gte=from_date,
-                transaction__created_at__date__lte=to_date,
+                fee__edir_id=edir_id,
+                fee__fee_type="Fee",
+                transaction__transaction_type="PAYMENT",
+                transaction__payment_status__in=["Paid", "PAID"],
+                transaction__created_at__gte=start_dt,
+                transaction__created_at__lte=end_dt,
             )
             .select_related(
-                "user__user",
                 "fee",
                 "fee__supported_member",
+                "user",
                 "transaction",
+                "transaction__deposit",
+                "transaction__deposit__bank",
             )
-            .order_by(
-                "transaction__created_at"
-            )
+            .order_by("transaction__created_at", "user__full_name", "fee__id")
         )
 
         buffer = BytesIO()
-
-        document = SimpleDocTemplate(
+        doc = SimpleDocTemplate(
             buffer,
-            pagesize=landscape(A3),
+            pagesize=A4,
             rightMargin=10 * mm,
             leftMargin=10 * mm,
             topMargin=10 * mm,
             bottomMargin=10 * mm,
             title="Payment Details Report",
+            author="Edir Amba",
         )
 
-        elements = []
-
-        pdf_header(
-            elements,
-            "FEE PAYMENT DETAILS REPORT",
-            edir,
-            from_date,
-            to_date,
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "PaymentTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            leading=20,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#2B3945"),
+            spaceAfter=6,
+        )
+        subtitle_style = ParagraphStyle(
+            "PaymentSubtitle",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=12,
+            alignment=TA_CENTER,
+            spaceAfter=12,
         )
 
-        (
-            _,
-            _,
-            header_style,
-            cell_style,
-            member_style,
-        ) = report_styles()
-
-        header = [
-            Paragraph("#", header_style),
-            Paragraph("Date", header_style),
-            Paragraph("Member", header_style),
-            Paragraph("Fee", header_style),
-            Paragraph("Amount", header_style),
+        story = [
+            Paragraph("Payment Details Report", title_style),
             Paragraph(
-                "Payment Method",
-                header_style,
-            ),
-            Paragraph(
-                "Bank",
-                header_style,
+                f"Edir: {committee_member.edir.name} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                f"Period: {from_date:%d/%m/%Y} - {to_date:%d/%m/%Y} "
+                f"&nbsp;&nbsp;|&nbsp;&nbsp; Generated: {timezone.localtime():%d/%m/%Y %H:%M}",
+                subtitle_style,
             ),
         ]
 
-        data = [
-            header
-        ]
+        data = [[
+            "No.",
+            "Date",
+            "Member",
+            "Phone Number",
+            "Fee",
+            "Amount",
+            "Payment Method",
+            "Bank",
+        ]]
 
-        total = Decimal("0")
+        total_fee_amount = 0
+        count = 0
 
-        for index, assignment in enumerate(
-            assignments,
-            start=1,
-        ):
+        for assignment in assignments:
+            # Ignore disabled assignments even if old transaction data remains attached.
+            if assignment.status != "Active" or not assignment.user:
+                continue
 
-            transaction = (
-                assignment.transaction
+            transaction = assignment.transaction
+            member = assignment.user
+            fee = assignment.fee
+
+            count += 1
+            amount = fee.amount or 0
+            total_fee_amount += amount
+
+            data.append([
+                str(count),
+                payment_date_display(transaction),
+                member.full_name or "Unnamed member",
+                member.phone_number or "—",
+                fee_column_name(fee),
+                money_display(amount),
+                payment_method_display(transaction),
+                bank_name_display(transaction)
+                # if payment_method_display(transaction) == "Transfer"
+                # else "—",
+            ])
+
+        if count == 0:
+            story.append(
+                Paragraph(
+                    "No paid fee assignments were found within the selected payment date range.",
+                    styles["Normal"],
+                )
             )
-
-            payment_date = get_payment_date(
-                transaction
-            )
-
-            amount = get_payment_amount(
-                assignment
-            )
-
-            method = get_payment_method(
-                transaction
-            )
-
-            bank = get_bank_name(
-                transaction
-            )
-
-            fee_name = get_fee_column_name(
-                assignment.fee
-            )
-
-            if method.upper() != "TRANSFER":
-                bank = "—"
-
-            else:
-                bank = bank or "—"
-
-            row = [
-                Paragraph(
-                    str(index),
-                    cell_style,
-                ),
-                Paragraph(
-                    format_date(
-                        payment_date
-                    ),
-                    cell_style,
-                ),
-                Paragraph(
-                    assignment.user.user.full_name,
-                    member_style,
-                ),
-                Paragraph(
-                    fee_name,
-                    member_style,
-                ),
-                Paragraph(
-                    f"{amount:,.2f} ETB",
-                    cell_style,
-                ),
-                Paragraph(
-                    method.title(),
-                    cell_style,
-                ),
-                Paragraph(
-                    bank,
-                    cell_style,
-                ),
+        else:
+            # Total width = 190 mm, matching A4 portrait width minus margins.
+            widths = [
+                8 * mm, 18 * mm, 32 * mm, 22 * mm,
+                40 * mm, 20 * mm, 22 * mm, 28 * mm,
             ]
+            story.append(make_pdf_table(data, widths, font_size=6.5))
+            story.append(Spacer(1, 4 * mm))
+            story.append(
+                Paragraph(
+                    f"Fee amount total (based on Fee.amount): {money_display(total_fee_amount)}",
+                    styles["Normal"],
+                )
+            )
+            story.append(Spacer(1, 2 * mm))
+            story.append(
+                Paragraph(
+                    "This total sums the configured fee amount for each paid fee assignment. "
+                    "If one transaction pays multiple fees, the actual amount allocated to each "
+                    "fee cannot be verified from the current schema because FeeAssignment has "
+                    "no individual paid-amount field.",
+                    styles["Italic"],
+                )
+            )
 
-            data.append(row)
+        doc.build(story)
+        filename = f"payment_details_edir_{edir_id}_{from_date}_{to_date}.pdf"
+        return pdf_response(buffer, filename)
 
-            total += amount
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Failed to generate payment details report for edir_id=%s", edir_id
+        )
+        return Response(
+            {"error": "Failed to generate payment details report."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
-        # Total
-        data.append(
+
+# ---------------------------------------------------------------------------
+# Report 3: Financial Summary Report
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def financial_summary_report(request, edir_id):
+    # from decimal import Decimal
+    # from .models import FeePenalty
+
+    from_date, to_date, date_error = parse_report_dates(request)
+    if date_error:
+        return date_error
+
+    committee_member = get_active_committee_member(request, edir_id)
+    if not committee_member:
+        return Response(
+            {"error": ( "Only an active committee member of this edir can generate reports.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        start_dt = date_to_datetime_start(from_date)
+        end_dt = date_to_datetime_end(to_date)
+
+        # ---------------------------------------------------------------
+        # 1. Expected fee amount
+        # Fee amount multiplied by the number of active assignments.
+        # ---------------------------------------------------------------
+        fees_created_in_period = Fee.objects.filter(
+            edir_id=edir_id,
+            fee_type="Fee",
+            created_date__gte=start_dt,
+            created_date__lte=end_dt,
+        ).order_by("created_date", "id")
+
+        expected_fee_amount = Decimal("0.00")
+
+        for fee in fees_created_in_period:
+            assigned_members = FeeAssignment.objects.filter(
+                fee=fee,
+                status="Active",
+                user__isnull=False,
+            ).count()
+
+            expected_fee_amount += (
+                Decimal(str(fee.amount or 0)) * assigned_members
+            )
+
+        # ---------------------------------------------------------------
+        # 2 & 3. Fee collections during the payment date range.
+        # Split fees by when the fee record was created.
+        # Use unique transaction IDs so a transaction is not counted twice.
+        # ---------------------------------------------------------------
+        paid_fee_assignments = (
+            FeeAssignment.objects.filter(
+                fee__edir_id=edir_id,
+                fee__fee_type="Fee",
+                status="Active",
+                transaction__transaction_type="PAYMENT",
+                transaction__payment_status__in=["Paid", "PAID"],
+                transaction__created_at__gte=start_dt,
+                transaction__created_at__lte=end_dt,
+            )
+            .select_related("fee", "transaction")
+            .order_by("transaction__created_at", "id")
+        )
+
+        current_period_transactions = {}
+        previous_period_transactions = {}
+
+        for assignment in paid_fee_assignments:
+            trx = assignment.transaction
+
+            if not trx:
+                continue
+
+            # Deduplicate within each category by transaction ID.
+            if start_dt <= assignment.fee.created_date <= end_dt:
+                current_period_transactions[trx.id] = trx.amount or 0
+            elif assignment.fee.created_date < start_dt:
+                previous_period_transactions[trx.id] = trx.amount or 0
+
+        current_period_fee_collections = sum(
+            Decimal(str(amount))
+            for amount in current_period_transactions.values()
+        )
+
+        previous_period_fee_collections = sum(
+            Decimal(str(amount))
+            for amount in previous_period_transactions.values()
+        )
+
+        # ---------------------------------------------------------------
+        # 4. Penalties.
+        # Per your current design, calculate this from FeePenalty records
+        # using calculated_at and penalty_amount.
+        # ---------------------------------------------------------------
+        penalty_collected = (
+            FeePenalty.objects.filter(
+                fee_assignment__fee__edir_id=edir_id,
+                fee_assignment__fee__fee_type="Fee",
+                calculated_at__gte=start_dt,
+                calculated_at__lte=end_dt,
+            ).aggregate(
+                total=Sum("penalty_amount")
+            )["total"]
+            or Decimal("0.00")
+        )
+
+        # ---------------------------------------------------------------
+        # 5. Other income collected during the selected period.
+        # Income records are Fee records with fee_type="Income".
+        # Their linked paid transactions determine the collection date.
+        # ---------------------------------------------------------------
+        income_assignments = (
+            FeeAssignment.objects.filter(
+                fee__edir_id=edir_id,
+                fee__fee_type="Income",
+                transaction__transaction_type="PAYMENT",
+                transaction__payment_status__in=["Paid", "PAID"],
+                transaction__created_at__gte=start_dt,
+                transaction__created_at__lte=end_dt,
+            )
+            .select_related("transaction")
+            .order_by("transaction__created_at", "id")
+        )
+
+        income_transactions = {}
+        for assignment in income_assignments:
+            trx = assignment.transaction
+            if trx:
+                income_transactions[trx.id] = trx.amount or 0
+
+        other_income_collected = sum(
+            Decimal(str(amount))
+            for amount in income_transactions.values()
+        )
+
+        # ---------------------------------------------------------------
+        # 6. Total income
+        # ---------------------------------------------------------------
+        total_income = (
+            current_period_fee_collections
+            + previous_period_fee_collections
+            + penalty_collected
+            + other_income_collected
+        )
+
+        # ---------------------------------------------------------------
+        # 7. Expenses.
+        # Expense records are stored in Fee with fee_type="Expense".
+        # payment_date is used as the expense date.
+        # ---------------------------------------------------------------
+        expense_records = Fee.objects.filter(
+            edir_id=edir_id,
+            fee_type="Expense",
+            payment_date__gte=from_date,
+            payment_date__lte=to_date,
+            status="Active",
+        )
+
+        total_expenses = sum(
+            (
+                Decimal(str(expense.amount or 0))
+                for expense in expense_records
+            ),
+            Decimal("0.00"),
+        )
+
+        # ---------------------------------------------------------------
+        # 8. Remaining balance
+        # ---------------------------------------------------------------
+        remaining_balance = total_income - total_expenses
+
+        # ---------------------------------------------------------------
+        # Build PDF
+        # ---------------------------------------------------------------
+        buffer = BytesIO()
+
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=18 * mm,
+            leftMargin=18 * mm,
+            topMargin=15 * mm,
+            bottomMargin=15 * mm,
+            title="Financial Summary Report",
+            author="Edir Amba",
+        )
+
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            "FinancialSummaryTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=17,
+            leading=21,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#2B3945"),
+            spaceAfter=8,
+        )
+
+        subtitle_style = ParagraphStyle(
+            "FinancialSummarySubtitle",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=13,
+            alignment=TA_CENTER,
+            spaceAfter=18,
+        )
+
+        section_style = ParagraphStyle(
+            "FinancialSummarySection",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            leading=13,
+            textColor=colors.HexColor("#2B3945"),
+            spaceBefore=10,
+            spaceAfter=6,
+        )
+
+        story = [
+            Paragraph("Financial Summary Report", title_style),
+            Paragraph(
+                f"Edir: {committee_member.edir.name}<br/>"
+                f"Period: {from_date:%d/%m/%Y} - {to_date:%d/%m/%Y}<br/>"
+                f"Generated: {timezone.localtime():%d/%m/%Y %H:%M}",
+                subtitle_style,
+            ),
+            Paragraph("Financial Overview", section_style),
+        ]
+
+        summary_rows = [
+            ["No.", "Description", "Amount (ETB)"],
             [
-                "",
-                "",
-                "",
-                Paragraph(
-                    "<b>Total</b>",
-                    cell_style,
-                ),
-                Paragraph(
-                    f"<b>{total:,.2f} ETB</b>",
-                    cell_style,
-                ),
-                "",
-                "",
-            ]
-        )
-
-        table = Table(
-            data,
-            colWidths=[
-                10 * mm,
-                27 * mm,
-                45 * mm,
-                60 * mm,
-                30 * mm,
-                35 * mm,
-                55 * mm,
+                "1",
+                "Expected fee amount",
+                money_display(expected_fee_amount),
             ],
-            repeatRows=1,
-            hAlign="LEFT",
+            [
+                "2",
+                "Collected from fees created during this period",
+                money_display(current_period_fee_collections),
+            ],
+            [
+                "3",
+                "Collected from fees created before this period",
+                money_display(previous_period_fee_collections),
+            ],
+            [
+                "4",
+                "Penalty amount recorded during this period",
+                money_display(penalty_collected),
+            ],
+            [
+                "5",
+                "Other income collected during this period",
+                money_display(other_income_collected),
+            ],
+            [
+                "6",
+                "TOTAL INCOME",
+                money_display(total_income),
+            ],
+            [
+                "7",
+                "Total expenses",
+                money_display(total_expenses),
+            ],
+            [
+                "8",
+                "REMAINING BALANCE",
+                money_display(remaining_balance),
+            ],
+        ]
+
+        summary_table = make_pdf_table(
+            summary_rows,
+            col_widths=[15 * mm, 105 * mm, 45 * mm],
+            font_size=8,
         )
 
-        table.setStyle(
+        # Highlight the total income and remaining balance rows.
+        summary_table.setStyle(
             TableStyle(
                 [
                     (
                         "BACKGROUND",
-                        (0, 0),
-                        (-1, 0),
-                        colors.HexColor(
-                            "#0077b6"
-                        ),
+                        (0, 6),
+                        (-1, 6),
+                        colors.HexColor("#E5EDF2"),
                     ),
                     (
-                        "TEXTCOLOR",
-                        (0, 0),
-                        (-1, 0),
-                        colors.white,
-                    ),
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.35,
-                        colors.grey,
-                    ),
-                    (
-                        "VALIGN",
-                        (0, 0),
-                        (-1, -1),
-                        "MIDDLE",
-                    ),
-                    (
-                        "ROWBACKGROUNDS",
-                        (0, 1),
-                        (-1, -2),
-                        [
-                            colors.white,
-                            colors.HexColor(
-                                "#f5f9fc"
-                            ),
-                        ],
+                        "FONTNAME",
+                        (0, 6),
+                        (-1, 6),
+                        "Helvetica-Bold",
                     ),
                     (
                         "BACKGROUND",
-                        (0, -1),
-                        (-1, -1),
-                        colors.HexColor(
-                            "#eaf4fb"
-                        ),
+                        (0, 8),
+                        (-1, 8),
+                        colors.HexColor("#E5EDF2"),
                     ),
                     (
-                        "TOPPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        5,
+                        "FONTNAME",
+                        (0, 8),
+                        (-1, 8),
+                        "Helvetica-Bold",
                     ),
-                    (
-                        "BOTTOMPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        5,
-                    ),
+                    ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                    ("ALIGN", (-1, 1), (-1, -1), "RIGHT"),
                 ]
             )
         )
 
-        elements.append(table)
+        story.append(summary_table)
+        story.append(Spacer(1, 8 * mm))
 
-        document.build(elements)
+        story.append(
+            Paragraph("Calculation Notes", section_style)
+        )
 
-        buffer.seek(0)
+        notes = [
+            "Expected fees are calculated from fees created within the selected period, multiplied by their active assigned-member counts.",
+            "Fee collections are grouped by the fee record's creation date and the linked transaction's payment date.",
+            "Penalty amounts are summed separately from FeePenalty.penalty_amount using calculated_at.",
+            "Other income is based on paid PAYMENT transactions linked to Income fee records.",
+            "Expenses are summed from Expense fee records whose payment_date falls within the selected period.",
+            "Remaining balance equals total income minus total expenses.",
+        ]
+
+        for note in notes:
+            story.append(
+                Paragraph(
+                    f"&bull; {note}",
+                    styles["Normal"],
+                )
+            )
+            story.append(Spacer(1, 2 * mm))
+
+        doc.build(story)
 
         filename = (
-            "payment_details_"
+            f"financial_summary_edir_{edir_id}_"
             f"{from_date}_{to_date}.pdf"
         )
 
-        return FileResponse(
-            buffer,
-            as_attachment=True,
-            filename=filename,
-            content_type="application/pdf",
+        return pdf_response(buffer, filename)
+
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Failed to generate financial summary report for edir_id=%s",
+            edir_id,
         )
 
-    except ValueError as e:
-
         return Response(
-            {
-                "error": str(e)
-            },
+            {"error": "Failed to generate financial summary report."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def verify_pin(request):
+    pin = request.data.get("password")
+
+    if not pin:
+        return Response(
+            {"detail": "PIN is required."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    except Exception as e:
-
+    if not request.user.check_password(pin):
         return Response(
-            {
-                "error":
-                    "Failed to generate "
-                    "payment details report.",
-                "details": str(e),
-            },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            {"detail": "Incorrect PIN."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
+
+    return Response(
+        {
+            "success": True,
+            "message": "PIN verified successfully.",
+        },
+        status=status.HTTP_200_OK,
+    )
